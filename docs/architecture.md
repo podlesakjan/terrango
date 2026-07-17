@@ -8,7 +8,7 @@ This document defines the technology stack, workload distribution between client
 
 ### Client Side (Flutter Application)
 *   **Framework:** Flutter (Dart) – ensures cross-platform development for iOS and Android with native performance for 2D graphics.
-*   **Map Display:** `flutter_map` + `latlong2` + **Mapbox Tiles** vector tiles (dark, futuristic style). It utilizes the free tier of up to 50,000 MAU.
+*   **Map Display:** `mapbox_maps_flutter` built on **Mapbox Maps SDKs for Mobile** with a dark, futuristic Mapbox vector style. The SDK provides native GPU-accelerated map rendering, camera and gesture handling, runtime style layers for game overlays, and MAU-based billing.
 *   **Local Geomathematics:** `h3_flutter` – C-port of the Uber H3 library integrated into Dart via FFI. It enables instant conversion of GPS coordinates to hexagon indices directly on the device.
 *   **Geolocation & Sensors:** `geolocator` – acquiring precise GPS coordinates with spoofed location detection (`isMocked`) enabled.
 *   **Environment Scanning:** `flutter_blue_plus` – low-level Bluetooth Low Energy (BLE) management for passive capturing of surrounding broadcasts in both foreground and background.
@@ -33,7 +33,7 @@ This document defines the technology stack, workload distribution between client
 To achieve maximum game smoothness, save mobile phone battery, and minimize data transfer, the architecture is designed so that the client performs the maximum possible visual and deterministic calculations locally. The server acts exclusively as an **authoritative data storage and rules validator (Anticheat)**.
 
 ### What the Client (Flutter) Calculates and Processes:
-1.  **Geometry Rendering:** The server sends only clean text H3 indices (e.g., `"891f1a1c62fffff"`) to the application. Using `h3_flutter`, Flutter locally calculates the exact latitudes and longitudes of all 6 vertices of the hexagon and renders them as a vector polygon over the Mapbox tiles.
+1.  **Geometry Rendering:** The server sends only clean text H3 indices (e.g., `"891f1a1c62fffff"`) to the application. Using `h3_flutter`, Flutter locally calculates the exact latitudes and longitudes of all 6 vertices of the hexagon and publishes them into Mapbox runtime `GeoJSON` sources rendered through `fill` and `line` style layers above the native Mapbox base map.
 2.  **Local Recruitment Calculation:** When the BLE radar captures the MAC address / UUID of a device and the signal strength (RSSI), the client itself locally performs a SHA-256 hash to determine the class, eventual specific skill (Scout, Jammer, Decoy), and base Combat Strength (BS) according to the signal strength. The resulting generated soldier is sent to the server for approval.
 3.  **Bonus Calculation for UI:** When expanding an owned hexagon in the Context Panel (Screen 2), the client locally queries the H3 library for the indices of the 6 neighboring hexagons and compares them with the list of its owned fields. It immediately prints the background bonus (**+100%** per neighbor) onto the UI without burdening the server with a query.
 
@@ -205,7 +205,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
 #### Direction: Client -> Server (Player Actions)
 
 *   **Event: `map_subscribe`**
-    *   **Usage:** Subscribing to map changes based on the visible bounding box in the Flutter application.
+    *   **Usage:** Subscribing to map changes based on the current visible camera viewport in the Mapbox map widget.
     *   **Payload:**
         ```json
         {
