@@ -324,14 +324,13 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `incoming_attack_alert`**
-    *   **Usage:** Immediate warning for a remote defender. Triggers a 120-second window to send reinforcements.
+    *   **Usage:** Immediate warning for a remote defender.
     *   **Payload:**
         ```json
         {
           "defendingH3Index": "891f1a1c62fffff",
           "territoryName": "Domovská základna",
           "attackerName": "Ragnarok",
-          "secondsRemaining": 120
         }
         ```
 
@@ -359,6 +358,130 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
           "mySurvivors": [
             { "id": "u1", "bs": 210 },
             { "id": "u2", "bs": 145 }
+          ]
+        }
+        ```
+
+#### Tactical Map (Screen 2)
+
+*   **`POST /api/v1/territory/occupy`**
+    *   **Description:** Occupies a free hexagon at the player's current GPS location[cite: 4]. Creates a new Outpost Territory if the occupied hexagon is not adjacent to any existing territory[cite: 4].
+    *   **Request Body:**
+        ```json
+        {
+          "h3Index": "891f1a1c62fffff",
+          "latitude": 50.0755,
+          "longitude": 14.4378,
+          "garrisonSoldierIds": ["u1", "u2", "u3"],
+          "territoryName": "Cabin Outpost"
+        }
+        ```
+    *   **Response (201):**
+        ```json
+        {
+          "status": "success",
+          "territoryId": "outpost-123",
+          "createdNewTerritory": true
+        }
+        ```
+
+*   **`PATCH /api/v1/territory/:id/center`**
+    *   **Description:** Changes the Center 👑 of the selected Home Territory[cite: 4].
+    *   **Request Body:**
+        ```json
+        {
+          "h3Index": "891f1a1c62fffff"
+        }
+        ```
+    *   **Response (200):**
+        ```json
+        {
+          "status": "success"
+        }
+        ```
+
+---
+
+### 3.2 WebSocket Gateway (Real-time Protocol)
+
+#### Direction: Client -> Server (Player Actions)
+
+*   **Event: `request_map_snapshot`**
+    *   **Usage:** Requests the complete state of all currently visible hexagons immediately after connecting or reconnecting[cite: 4].
+    *   **Payload:**
+        ```json
+        {
+          "visibleH3Indexes": [
+            "891f1a1c62fffff",
+            "891f1a1c62ffffe"
+          ]
+        }
+        ```
+
+*   **Event: `resume_session`**
+    *   **Usage:** Requests synchronization after reconnecting following a network interruption or application resume[cite: 4].
+    *   **Payload:**
+        ```json
+        {
+          "lastSyncTimestamp": "2026-07-17T15:30:25Z"
+        }
+        ```
+
+---
+
+#### Direction: Server -> Client (State Updates & Notifications)
+
+*   **Event: `map_snapshot`**
+    *   **Usage:** Returns the complete current state of all requested hexagons after subscription or reconnect[cite: 4].
+    *   **Payload:**
+        ```json
+        {
+          "hexagons": [
+            {
+              "h3Index": "891f1a1c62fffff",
+              "ownerName": "Warrior99",
+              "color": "#2196F3",
+              "hasGarrison": true,
+              "isCenter": true
+            },
+            {
+              "h3Index": "891f1a1c62ffffe",
+              "ownerName": null,
+              "color": null,
+              "hasGarrison": false,
+              "isCenter": false
+            }
+          ]
+        }
+        ```
+
+*   **Event: `army_update`**
+    *   **Usage:** Sent whenever the player's reserve or garrisons change due to recruitment, deployment, withdrawal, reinforcement or battle resolution[cite: 4].
+    *   **Payload:**
+        ```json
+        {
+          "reserveBs": 1420,
+          "reserveCount": 12,
+          "patrolCount": 28
+        }
+        ```
+
+*   **Event: `territory_update`**
+    *   **Usage:** Sent whenever territory connectivity changes (Center moved, Outpost created, Home Territory split or merged)[cite: 4].
+    *   **Payload:**
+        ```json
+        {
+          "home": {
+            "id": "home-id",
+            "hexCount": 18,
+            "centerH3Index": "891f1a1c62fffff"
+          },
+          "outposts": [
+            {
+              "id": "outpost-1",
+              "name": "Chata u lesa",
+              "hexCount": 4
+            }
           ]
         }
         ```
