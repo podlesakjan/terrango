@@ -85,6 +85,73 @@ Used for asynchronous operations, account management, viewing history, and stati
         }
         ```
 
+#### Tactical Map (Screen 2)
+*   **`POST /api/v1/territory/occupy`**
+    *   **Description:** Occupies a free hexagon at the player's current GPS location. Creates a new Outpost Territory if the occupied hexagon is not adjacent to any existing territory.
+    *   **Request Body:**
+        ```json
+        {
+          "h3Index": "891f1a1c62fffff",
+          "latitude": 50.0755,
+          "longitude": 14.4378,
+          "garrisonSoldierIds": ["u1", "u2", "u3"],
+          "territoryName": "Cabin Outpost"
+        }
+        ```
+    *   **Response (201):**
+        ```json
+        {
+          "status": "success",
+          "territoryId": "outpost-123",
+          "createdNewTerritory": true
+        }
+        ```
+
+*   **`GET /api/v1/hex/:h3Index`**
+    *   **Description:** Loads the full authoritative data for the Tactical Map Context Panel after the player taps a hexagon. For an owned hexagon, the response includes the territory name, exact garrison composition, and the current reserve snapshot needed to choose concrete soldiers for `DEPLOY` / `WITHDRAW` actions.
+    *   **Response (200) - Owned Hexagon Example:**
+        ```json
+        {
+          "h3Index": "891f1a1c62fffff",
+          "state": "OWNED",
+          "territory": {
+            "id": "home-id",
+            "name": "Domovská základna",
+            "type": "HOME"
+          },
+          "isCenter": true,
+          "backgroundBonusPercent": 200,
+          "garrison": {
+            "soldierCount": 5,
+            "totalBs": 650,
+            "soldiers": [
+              { "id": "u9", "type": "WARRIOR", "rarity": "ADVANCED", "bs": 180, "skill": null },
+              { "id": "u10", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "JAMMER" }
+            ]
+          },
+          "reserve": [
+            { "id": "u1", "type": "WARRIOR", "rarity": "PROTOTYPE", "bs": 250, "skill": null },
+            { "id": "u2", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "SCOUT" }
+          ]
+        }
+        ```
+        *(For `state: FREE` and `state: ENEMY`, the server returns the same envelope with only the fields relevant to that interaction mode.)*
+
+*   **`PATCH /api/v1/territory/:id/center`**
+    *   **Description:** Changes the Center 👑 of the selected Home Territory.
+    *   **Request Body:**
+        ```json
+        {
+          "h3Index": "891f1a1c62fffff"
+        }
+        ```
+    *   **Response (200):**
+        ```json
+        {
+          "status": "success"
+        }
+        ```
+
 #### Barracks (Screen 4)
 *   **`GET /api/v1/barracks`**
     *   **Description:** Loading the complete state of the army for synchronization on any device.
@@ -204,6 +271,27 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
 
 #### Direction: Client -> Server (Player Actions)
 
+*   **Event: `request_map_snapshot`**
+    *   **Usage:** Requests the complete state of all currently visible hexagons immediately after connecting or reconnecting.
+    *   **Payload:**
+        ```json
+        {
+          "visibleH3Indexes": [
+            "891f1a1c62fffff",
+            "891f1a1c62ffffe"
+          ]
+        }
+        ```
+
+*   **Event: `resume_session`**
+    *   **Usage:** Requests synchronization after reconnecting following a network interruption or application resume.
+    *   **Payload:**
+        ```json
+        {
+          "lastSyncTimestamp": "2026-07-17T15:30:25Z"
+        }
+        ```
+
 *   **Event: `map_subscribe`**
     *   **Usage:** Subscribing to map changes based on the current visible camera viewport in the Mapbox map widget.
     *   **Payload:**
@@ -241,7 +329,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `garrison_modify`**
-    *   **Usage:** Withdrawing soldiers from a hexagon back into reserves or deploying them to a garrison (within the context panel on an owned field).
+    *   **Usage:** Withdrawing soldiers from a hexagon back into reserves or deploying them to a garrison (within the context panel on an owned field). On success, the server emits refreshed `hex_detail_update` and `army_update` events to the acting player.
     *   **Payload:**
         ```json
         {
@@ -304,6 +392,35 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         }
         ```
 
+*   **Event: `hex_detail_update`**
+    *   **Usage:** Sends the full authoritative state of a single hexagon for the currently opened Context Panel after deployment, withdrawal, occupation, or any server-side garrison change.
+    *   **Payload (Owned Hexagon Example):**
+        ```json
+        {
+          "h3Index": "891f1a1c62fffff",
+          "state": "OWNED",
+          "territory": {
+            "id": "home-id",
+            "name": "Domovská základna",
+            "type": "HOME"
+          },
+          "isCenter": true,
+          "backgroundBonusPercent": 200,
+          "garrison": {
+            "soldierCount": 6,
+            "totalBs": 830,
+            "soldiers": [
+              { "id": "u1", "type": "WARRIOR", "rarity": "PROTOTYPE", "bs": 250, "skill": null },
+              { "id": "u9", "type": "WARRIOR", "rarity": "ADVANCED", "bs": 180, "skill": null },
+              { "id": "u10", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "JAMMER" }
+            ]
+          },
+          "reserve": [
+            { "id": "u2", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "SCOUT" }
+          ]
+        }
+        ```
+
 *   **Event: `recruit_result`**
     *   **Usage:** Response to a recruitment attempt. Updates the visualization feed on the BLE Radar.
     *   **Payload (Success):**
@@ -362,77 +479,8 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         }
         ```
 
-#### Tactical Map (Screen 2)
-
-*   **`POST /api/v1/territory/occupy`**
-    *   **Description:** Occupies a free hexagon at the player's current GPS location[cite: 4]. Creates a new Outpost Territory if the occupied hexagon is not adjacent to any existing territory[cite: 4].
-    *   **Request Body:**
-        ```json
-        {
-          "h3Index": "891f1a1c62fffff",
-          "latitude": 50.0755,
-          "longitude": 14.4378,
-          "garrisonSoldierIds": ["u1", "u2", "u3"],
-          "territoryName": "Cabin Outpost"
-        }
-        ```
-    *   **Response (201):**
-        ```json
-        {
-          "status": "success",
-          "territoryId": "outpost-123",
-          "createdNewTerritory": true
-        }
-        ```
-
-*   **`PATCH /api/v1/territory/:id/center`**
-    *   **Description:** Changes the Center 👑 of the selected Home Territory[cite: 4].
-    *   **Request Body:**
-        ```json
-        {
-          "h3Index": "891f1a1c62fffff"
-        }
-        ```
-    *   **Response (200):**
-        ```json
-        {
-          "status": "success"
-        }
-        ```
-
----
-
-### 3.2 WebSocket Gateway (Real-time Protocol)
-
-#### Direction: Client -> Server (Player Actions)
-
-*   **Event: `request_map_snapshot`**
-    *   **Usage:** Requests the complete state of all currently visible hexagons immediately after connecting or reconnecting[cite: 4].
-    *   **Payload:**
-        ```json
-        {
-          "visibleH3Indexes": [
-            "891f1a1c62fffff",
-            "891f1a1c62ffffe"
-          ]
-        }
-        ```
-
-*   **Event: `resume_session`**
-    *   **Usage:** Requests synchronization after reconnecting following a network interruption or application resume[cite: 4].
-    *   **Payload:**
-        ```json
-        {
-          "lastSyncTimestamp": "2026-07-17T15:30:25Z"
-        }
-        ```
-
----
-
-#### Direction: Server -> Client (State Updates & Notifications)
-
 *   **Event: `map_snapshot`**
-    *   **Usage:** Returns the complete current state of all requested hexagons after subscription or reconnect[cite: 4].
+    *   **Usage:** Returns the complete current state of all requested hexagons after subscription or reconnect.
     *   **Payload:**
         ```json
         {
@@ -456,7 +504,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `army_update`**
-    *   **Usage:** Sent whenever the player's reserve or garrisons change due to recruitment, deployment, withdrawal, reinforcement or battle resolution[cite: 4].
+    *   **Usage:** Sent whenever the player's reserve or garrisons change due to recruitment, deployment, withdrawal, reinforcement or battle resolution.
     *   **Payload:**
         ```json
         {
@@ -467,7 +515,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `territory_update`**
-    *   **Usage:** Sent whenever territory connectivity changes (Center moved, Outpost created, Home Territory split or merged)[cite: 4].
+    *   **Usage:** Sent whenever territory connectivity changes (Center moved, Outpost created, Home Territory split or merged).
     *   **Payload:**
         ```json
         {
