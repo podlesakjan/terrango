@@ -20,7 +20,9 @@ This document defines the technology stack, workload distribution between client
 *   **Runtime & Framework:** Node.js / TypeScript + **NestJS** – robust modular architecture with excellent built-in support for WebSockets (`@nestjs/websockets`).
 *   **Real-time Network Layer:** Socket.io integrated into NestJS – ensures a persistent, bidirectional connection, multiplexing, and room management (rooms for specific map regions).
 *   **Spatial Mathematics:** `h3-js` (Node.js bindings) – validation of hexagon neighborhoods and background bonus calculations on the server side.
-*   **Persistent Storage:** **PostgreSQL + PostGIS** – relational database for secure storage of user accounts, soldiers, grid ownership, and the history of unique Bluetooth IDs.
+*   **Persistent Storage:** **PostgreSQL + PostGIS** – relational database for secure storage of user accounts, grid ownership, and the history of unique Bluetooth IDs. NOTE: individual soldier rows are no longer stored as a first-class table for live gameplay. Instead the server stores aggregated army compositions:
+    - Per-player reserves are stored in a new `player_armies` table as a JSONB `reservesComposition` (buckets grouped by type/rarity/skill with counts and totalBs).
+    - Per-hex garrisons are stored in `hexes.garrisonComposition` (JSONB) as an array of buckets { type, rarity, skill, count, totalBs }.
 *   **In-Memory Cache & Distribution:** **Redis** – lightning-fast management of online player positions and distribution of map state changes across server instances using Redis Pub/Sub.
 
 ### External Infrastructure
@@ -94,7 +96,9 @@ Used for asynchronous operations, account management, viewing history, and stati
           "h3Index": "891f1a1c62fffff",
           "latitude": 50.0755,
           "longitude": 14.4378,
-          "garrisonSoldierIds": ["u1", "u2", "u3"],
+          "garrisonComposition": [
+            { "type": "WARRIOR", "rarity": "STANDARD", "skill": null, "count": 3, "totalBs": 600 }
+          ],
           "territoryName": "Cabin Outpost"
         }
         ```
@@ -108,7 +112,7 @@ Used for asynchronous operations, account management, viewing history, and stati
         ```
 
 *   **`GET /api/v1/hex/:h3Index`**
-    *   **Description:** Loads the full authoritative data for the Tactical Map Context Panel after the player taps a hexagon. For an owned hexagon, the response includes the territory name, exact garrison composition, and the current reserve snapshot needed to choose concrete soldiers for `DEPLOY` / `WITHDRAW` actions.
+    *   **Description:** Loads the full authoritative data for the Tactical Map Context Panel after the player taps a hexagon. For an owned hexagon, the response includes the territory name, exact garrison composition, and the current reserve snapshot needed to choose aggregated composition buckets for `DEPLOY` / `WITHDRAW` actions.
     *   **Response (200) - Owned Hexagon Example:**
         ```json
         {
@@ -122,16 +126,16 @@ Used for asynchronous operations, account management, viewing history, and stati
           "isCenter": true,
           "backgroundBonusPercent": 200,
           "garrison": {
-            "soldierCount": 5,
-            "totalBs": 650,
-            "soldiers": [
-              { "id": "u9", "type": "WARRIOR", "rarity": "ADVANCED", "bs": 180, "skill": null },
-              { "id": "u10", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "JAMMER" }
+            "soldierCount": 6,
+            "totalBs": 830,
+            "composition": [
+              { "type": "WARRIOR", "rarity": "PROTOTYPE", "skill": null, "count": 1, "totalBs": 250 },
+              { "type": "WARRIOR", "rarity": "ADVANCED", "skill": null, "count": 1, "totalBs": 180 },
+              { "type": "SUPPORT", "rarity": "STANDARD", "skill": "JAMMER", "count": 1, "totalBs": 50 }
             ]
           },
           "reserve": [
-            { "id": "u1", "type": "WARRIOR", "rarity": "PROTOTYPE", "bs": 250, "skill": null },
-            { "id": "u2", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "SCOUT" }
+            { "type": "SUPPORT", "rarity": "STANDARD", "skill": "SCOUT", "count": 1, "totalBs": 50 }
           ]
         }
         ```
@@ -159,8 +163,8 @@ Used for asynchronous operations, account management, viewing history, and stati
         ```json
         {
           "reserves": [
-            { "id": "u1", "type": "WARRIOR", "rarity": "PROTOTYPE", "bs": 250, "skill": null },
-            { "id": "u2", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "SCOUT" }
+            { "type": "WARRIOR", "rarity": "PROTOTYPE", "skill": null, "count": 1, "totalBs": 250 },
+            { "type": "SUPPORT", "rarity": "STANDARD", "skill": "SCOUT", "count": 1, "totalBs": 50 }
           ],
           "patrols": [
             {
@@ -314,7 +318,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `recruit_device`**
-    *   **Usage:** Sending a locally calculated soldier from the BLE Radar (Screen 3) to the server for uniqueness validation and storage.
+    *   **Usage:** Sending one locally calculated unit from the BLE Radar (Screen 3) to the server for uniqueness validation and aggregation into the matching composition bucket.
     *   **Payload:**
         ```json
         {
@@ -334,8 +338,10 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```json
         {
           "h3Index": "891f1a1c62fffff",
-          "action": "DEPLOY", 
-          "soldierIds": ["u1", "u2"]
+          "action": "DEPLOY",
+          "composition": [
+            { "type": "WARRIOR", "rarity": "STANDARD", "skill": null, "count": 2, "totalBs": 400 }
+          ]
         }
         ```
 
@@ -345,29 +351,32 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```json
         {
           "targetH3Index": "891f1a1c62ffffb",
-          "soldierIds": ["u3", "u4", "u5"],
-          "burnSupportUnitId": "u6"
+          "composition": [
+            { "type": "WARRIOR", "rarity": "STANDARD", "skill": null, "count": 3, "totalBs": 600 }
+          ],
+          "burnSupportCount": 1
         }
         ```
-        *(If it is an Outpost and `burnSupportUnitId` is `null`, the server automatically applies **40%** casualties to the sent soldier IDs).*
+        *(If it is an Outpost and `burnSupportCount` is `null`, the server automatically applies **40%** casualties (distributed by BS ratio) to the sent composition. If `burnSupportCount > 0`, that many SUPPORT units are removed from reserves instead and the full composition is moved.)*
 
 *   **Event: `scout_hex`**
-    *   **Usage:** Activating espionage on an enemy hexagon (requires physical presence).
+    *   **Usage:** Activating espionage on an enemy hexagon (requires physical presence). Server automatically consumes 1 SCOUT SUPPORT unit from reserves.
     *   **Payload:**
         ```json
         {
-          "targetH3Index": "891f1a1c62ffffa",
-          "scoutSoldierId": "u7"
+          "targetH3Index": "891f1a1c62ffffa"
         }
         ```
 
 *   **Event: `attack_hex`**
-    *   **Usage:** Initiating an attack on an occupied enemy hexagon (requires physical presence).
+    *   **Usage:** Initiating an attack on an occupied enemy hexagon (requires physical presence). The specified composition is immediately deducted from reserves.
     *   **Payload:**
         ```json
         {
           "targetH3Index": "891f1a1c62ffffa",
-          "attackerSoldierIds": ["u1", "u2", "u3", "u4"]
+          "attackerComposition": [
+            { "type": "WARRIOR", "rarity": "STANDARD", "skill": null, "count": 4, "totalBs": 800 }
+          ]
         }
         ```
 
@@ -409,14 +418,14 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
           "garrison": {
             "soldierCount": 6,
             "totalBs": 830,
-            "soldiers": [
-              { "id": "u1", "type": "WARRIOR", "rarity": "PROTOTYPE", "bs": 250, "skill": null },
-              { "id": "u9", "type": "WARRIOR", "rarity": "ADVANCED", "bs": 180, "skill": null },
-              { "id": "u10", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "JAMMER" }
+            "composition": [
+              { "type": "WARRIOR", "rarity": "PROTOTYPE", "skill": null, "count": 1, "totalBs": 250 },
+              { "type": "WARRIOR", "rarity": "ADVANCED", "skill": null, "count": 1, "totalBs": 180 },
+              { "type": "SUPPORT", "rarity": "STANDARD", "skill": "JAMMER", "count": 1, "totalBs": 50 }
             ]
           },
           "reserve": [
-            { "id": "u2", "type": "SUPPORT", "rarity": "STANDARD", "bs": 50, "skill": "SCOUT" }
+            { "type": "SUPPORT", "rarity": "STANDARD", "skill": "SCOUT", "count": 1, "totalBs": 50 }
           ]
         }
         ```
@@ -447,7 +456,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         {
           "defendingH3Index": "891f1a1c62fffff",
           "territoryName": "Domovská základna",
-          "attackerName": "Ragnarok",
+            "attackerName": "Ragnarok"
         }
         ```
 
@@ -473,8 +482,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
           "result": "VICTORY",
           "myDeadCount": 2,
           "mySurvivors": [
-            { "id": "u1", "bs": 210 },
-            { "id": "u2", "bs": 145 }
+            { "type": "WARRIOR", "rarity": "PROTOTYPE", "skill": null, "count": 1, "totalBs": 210 }
           ]
         }
         ```

@@ -9,7 +9,6 @@ export type SoldierType = 'WARRIOR' | 'SUPPORT';
 export type SoldierRarity = 'STANDARD' | 'ADVANCED' | 'PROTOTYPE';
 export type SoldierSkill = 'SCOUT' | 'JAMMER' | 'DECOY' | null;
 export type TerritoryType = 'HOME' | 'OUTPOST';
-export type HexState = 'FREE' | 'OWNED' | 'ENEMY';
 export type GarrisonAction = 'DEPLOY' | 'WITHDRAW';
 export type RecruitStatus = 'SUCCESS' | 'SKIPPED';
 export type ScoutStatus = 'SUCCESS' | 'JAMMED';
@@ -44,45 +43,18 @@ export interface UserState extends AuthenticatedPlayer {
   stats: PlayerStats;
 }
 
-export interface ReserveLocation {
-  kind: 'RESERVE';
-}
-
-export interface GarrisonLocation {
-  h3Index: string;
-  kind: 'GARRISON';
-}
-
-export interface LockedAttackLocation {
-  battleId: string;
-  kind: 'LOCKED_ATTACK';
-  targetH3Index: string;
-}
-
-export type SoldierLocation = ReserveLocation | GarrisonLocation | LockedAttackLocation;
-
-export interface Soldier {
-  bs: number;
-  createdAt: string;
-  id: string;
-  location: SoldierLocation;
-  ownerId: string;
+// Aggregated bucket representing counts of identical soldiers
+export interface SoldierBucket {
+  type: SoldierType;
   rarity: SoldierRarity;
   skill: SoldierSkill;
-  type: SoldierType;
-}
-
-export interface SoldierView {
-  bs: number;
-  id: string;
-  rarity: SoldierRarity;
-  skill: SoldierSkill;
-  type: SoldierType;
+  count: number;
+  totalBs: number; // sum of BS values for all soldiers in this bucket
 }
 
 export interface HexRecord {
   changedAt: string;
-  garrisonSoldierIds: Set<string>;
+  garrisonComposition: SoldierBucket[];
   h3Index: string;
   ownerId: string | null;
   territoryId: string | null;
@@ -122,7 +94,7 @@ export interface ScoutLogEntry {
 export type BattleLogEntry = AttackLogEntry | ScoutLogEntry;
 
 export interface PendingBattle {
-  attackerSoldierIds: string[];
+  attackerComposition: SoldierBucket[];
   attackerUserId: string;
   createdAt: string;
   defenderUserId: string;
@@ -175,10 +147,7 @@ export interface BattleResultPayload {
   battleId: string;
   h3Index: string;
   myDeadCount: number;
-  mySurvivors: Array<{
-    bs: number;
-    id: string;
-  }>;
+  mySurvivors: SoldierBucket[];
   result: BattleResult;
 }
 
@@ -190,7 +159,7 @@ export interface IncomingAttackAlertPayload {
 
 export interface HexGarrisonPayload {
   soldierCount: number;
-  soldiers: SoldierView[];
+  composition: SoldierBucket[];
   totalBs: number;
 }
 
@@ -205,7 +174,7 @@ export interface HexDetailOwnedPayload {
   garrison: HexGarrisonPayload;
   h3Index: string;
   isCenter: boolean;
-  reserve: SoldierView[];
+  reserve: SoldierBucket[];
   state: 'OWNED';
   territory: {
     id: string;

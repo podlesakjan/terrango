@@ -4,19 +4,19 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { RedisService } from '../redis/redis.module';
 import { gridDisk, isValidCell, latLngToCell } from 'h3-js';
 import { AuthService } from '../auth/auth.service';
 import {
   UserRepository,
-  SoldierRepository,
   HexRepository,
   TerritoryRepository,
   BattleLogRepository,
   BluetoothScanRepository,
 } from '../database/repositories';
+import { PlayerArmyRepository } from '../database/repositories/player-army.repository';
 
 import {
   ATTACK_PREPARATION_MS,
@@ -39,12 +39,10 @@ import {
   RecruitResultPayload,
   ScoutResultPayload,
   ScoutStatus,
-  Soldier,
-  SoldierLocation,
+  SoldierBucket,
   SoldierRarity,
   SoldierSkill,
   SoldierType,
-  SoldierView,
   TerritoryRecord,
   TerritoryUpdatePayload,
   UserState,
@@ -64,14 +62,14 @@ export class GameService {
   private readonly nicknameOwners = new Map<string, string>();
   private readonly pendingBattles = new Map<string, PendingBattle>();
   private readonly pendingBattleByHex = new Map<string, string>();
-  private readonly soldiers = new Map<string, Soldier>();
   private readonly territories = new Map<string, TerritoryRecord>();
   private readonly users = new Map<string, UserState>();
+  // Aggregated player armies: ownerId -> composition buckets
+  private readonly playerArmies = new Map<string, SoldierBucket[]>();
 
   constructor(
     private readonly authService: AuthService,
     private readonly userRepository: UserRepository,
-    private readonly soldierRepository: SoldierRepository,
     private readonly hexRepository: HexRepository,
     private readonly territoryRepository: TerritoryRepository,
     private readonly battleLogRepository: BattleLogRepository,
@@ -79,6 +77,11 @@ export class GameService {
     private readonly redisService?: RedisService,
   ) {
     this.events.setMaxListeners(0);
+  }
+  private playerArmyRepository!: PlayerArmyRepository;
+
+  setPlayerArmyRepository(repo: PlayerArmyRepository): void {
+    this.playerArmyRepository = repo;
   }
 
   async register(body: Record<string, unknown>) {
@@ -121,6 +124,7 @@ export class GameService {
     // Load into memory
     this.loadUserToMemory(userEntity);
     this.battleLogs.set(userId, []);
+    await this.loadPlayerArmyToMemory(userId);
 
     return {
       userId,
@@ -145,13 +149,19 @@ export class GameService {
     this.nicknameOwners.set(this.normalizeNickname(userEntity.nickname), userId);
   }
 
-  async resolveToken(token: string | undefined): Promise<AuthenticatedPlayer> {
-    const authenticated = this.authService.verifyToken(token);
-    const user = await this.getUserOrThrowAsync(authenticated.id);
-    return {
-      id: user.id,
-      nickname: user.nickname,
-    };
+  async loadPlayerArmyToMemory(userId: string): Promise<void> {
+    if (this.playerArmyRepository) {
+      const playerArmy = await this.playerArmyRepository.findByOwner(userId);
+      if (playerArmy) {
+        const composition: SoldierBucket[] = Array.isArray(playerArmy.reservesComposition)
+          ? playerArmy.reservesComposition
+          : [];
+        this.playerArmies.set(userId, composition);
+        return;
+      }
+    }
+    // Initialize empty army if not found
+    this.playerArmies.set(userId, []);
   }
 
   private async getUserOrThrowAsync(userId: string): Promise<UserState> {
@@ -166,6 +176,7 @@ export class GameService {
     }
 
     this.loadUserToMemory(userEntity);
+    await this.loadPlayerArmyToMemory(userId);
     return this.users.get(userId)!;
   }
 
@@ -260,10 +271,10 @@ export class GameService {
     const h3Index = this.requireH3Index(body.h3Index, 'h3Index');
     const latitude = this.requireNumber(body.latitude, 'latitude');
     const longitude = this.requireNumber(body.longitude, 'longitude');
-    const soldierIds = this.requireStringArray(
-      body.garrisonSoldierIds,
-      'garrisonSoldierIds',
-      { minLength: 1 },
+    const garrisonComposition = this.requireCompositionArray(
+      body.garrisonComposition,
+      'garrisonComposition',
+      { minItems: 1 },
     );
     const territoryName = this.optionalTerritoryName(body.territoryName);
 
@@ -281,14 +292,20 @@ export class GameService {
       throw new BadRequestException('The selected hexagon is not free.');
     }
 
-    const soldiers = this.requireReserveSoldiers(userId, soldierIds, 'garrisonSoldierIds');
+    // Validate composition exists in reserves and copy for removal
+    const toGarrison = this.requireReserveComposition(userId, garrisonComposition, 'garrisonComposition');
+
     const createsNewTerritory = !this.getNeighborIndexes(h3Index).some(
       (neighbor) => this.hexes.get(neighbor)?.ownerId === userId,
     );
 
     hex.ownerId = userId;
     hex.territoryId = null;
-    this.placeSoldiersIntoGarrison(soldiers, h3Index);
+    this.addToGarrisonComposition(h3Index, toGarrison);
+    this.removeFromReserveComposition(userId, toGarrison,
+      toGarrison.reduce((s, b) => s + b.count, 0),
+      this.sumCompositionBs(toGarrison)
+    );
     this.touchHex(h3Index);
 
     player.stats.hexesClaimed += 1;
@@ -349,21 +366,21 @@ export class GameService {
   getBarracks(userId: string) {
     return {
       patrols: this.getOwnedHexes(userId)
-        .filter((hex) => hex.garrisonSoldierIds.size > 0)
+        .filter((hex) => hex.garrisonComposition.length > 0)
         .map((hex) => {
-          const garrison = this.getGarrisonSoldiers(hex.h3Index);
+          const composition = hex.garrisonComposition;
           const territory = this.getTerritoryForHex(hex.h3Index);
+          const totalBs = this.sumCompositionBs(composition);
+          const soldierCount = composition.reduce((sum, bucket) => sum + bucket.count, 0);
           return {
             h3Index: hex.h3Index,
-            soldierCount: garrison.length,
+            soldierCount,
             territoryName: territory?.name ?? 'Unknown Territory',
-            totalBs: this.sumSoldierBs(garrison),
+            totalBs,
           };
         })
         .sort((left, right) => left.h3Index.localeCompare(right.h3Index)),
-      reserves: this.getReserveSoldiers(userId).map((soldier) =>
-        this.toSoldierView(soldier),
-      ),
+      reserves: this.playerArmies.get(userId) ?? [],
     };
   }
 
@@ -504,21 +521,18 @@ export class GameService {
     player.scannedBluetoothIds.add(bluetoothId);
     player.stats.scannedDevices += 1;
 
-    const soldier: Soldier = {
-      bs: calculatedSoldier.bs,
-      createdAt: this.nowIso(),
-      id: randomUUID(),
-      location: { kind: 'RESERVE' },
-      ownerId: userId,
+    // Find or create bucket in reserves and increment count/totalBs
+    const bucket = this.getOrCreateReserveBucket(userId, {
+      type: calculatedSoldier.type,
       rarity: calculatedSoldier.rarity,
       skill: calculatedSoldier.skill,
-      type: calculatedSoldier.type,
-    };
-    this.soldiers.set(soldier.id, soldier);
+    });
+    bucket.count += 1;
+    bucket.totalBs += calculatedSoldier.bs;
 
     const recruitPayload: RecruitResultPayload = {
       bluetoothId,
-      message: `Recruited ${soldier.type} (${soldier.rarity}, ${soldier.bs} BS).`,
+      message: `Recruited ${calculatedSoldier.type} (${calculatedSoldier.rarity}, ${calculatedSoldier.bs} BS).`,
       status: 'SUCCESS',
     };
 
@@ -535,8 +549,8 @@ export class GameService {
       ['DEPLOY', 'WITHDRAW'],
       'action',
     );
-    const soldierIds = this.requireStringArray(body.soldierIds, 'soldierIds', {
-      minLength: 1,
+    const composition = this.requireCompositionArray(body.composition, 'composition', {
+      minItems: 1,
     });
     const hex = this.getOwnedHexOrThrow(userId, h3Index);
 
@@ -549,19 +563,16 @@ export class GameService {
     this.assertPlayerStandingInHex(userId, h3Index);
 
     if (action === 'DEPLOY') {
-      const soldiers = this.requireReserveSoldiers(userId, soldierIds, 'soldierIds');
-      this.placeSoldiersIntoGarrison(soldiers, h3Index);
-    } else {
-      const soldiers = this.requireGarrisonSoldiers(
-        userId,
-        h3Index,
-        soldierIds,
-        'soldierIds',
+      const toGarrison = this.requireReserveComposition(userId, composition, 'composition');
+      this.addToGarrisonComposition(h3Index, toGarrison);
+      this.removeFromReserveComposition(userId, toGarrison,
+        toGarrison.reduce((s, b) => s + b.count, 0),
+        this.sumCompositionBs(toGarrison)
       );
-      this.moveSoldiersToReserve(soldiers);
-      for (const soldierId of soldierIds) {
-        hex.garrisonSoldierIds.delete(soldierId);
-      }
+    } else {
+      const toReserve = this.requireGarrisonComposition(userId, h3Index, composition, 'composition');
+      this.removeFromGarrisonComposition(h3Index, toReserve);
+      this.addToReserveComposition(userId, toReserve);
     }
 
     this.touchHex(h3Index);
@@ -579,57 +590,92 @@ export class GameService {
       throw new BadRequestException('Only the defending player can reinforce this hexagon.');
     }
 
-    const soldierIds = this.requireStringArray(body.soldierIds, 'soldierIds', {
-      minLength: 1,
+    const composition = this.requireCompositionArray(body.composition, 'composition', {
+      minItems: 1,
     });
-    const burnSupportUnitId = this.optionalString(body.burnSupportUnitId);
+    const burnSupportCount = this.optionalPositiveInteger(body.burnSupportCount);
     const territory = this.getTerritoryForHex(targetH3Index);
     if (!territory) {
       throw new BadRequestException('The target hexagon is not assigned to a territory.');
     }
 
-    const selectedSoldiers = this.requireReserveSoldiers(
-      userId,
-      soldierIds,
-      'soldierIds',
-    );
-
-    const movedSoldierIds: string[] = [];
-    const lostSoldierIds: string[] = [];
-    let burnedSupportId: string | null = null;
+    const toMove = this.requireReserveComposition(userId, composition, 'composition');
+    const movedComposition: SoldierBucket[] = [];
+    const lostComposition: SoldierBucket[] = [];
+    let burnedSupportCount = 0;
 
     if (territory.type === 'OUTPOST') {
-      if (burnSupportUnitId) {
-        if (soldierIds.includes(burnSupportUnitId)) {
-          throw new BadRequestException('The burned support unit must not be part of soldierIds.');
-        }
+      if (burnSupportCount && burnSupportCount > 0) {
+        // Burn support units from reserves and move rest
+        let toBurn = burnSupportCount;
+        const reserves = this.playerArmies.get(userId) ?? [];
 
-        const supportSoldier = this.requireReserveSupportSoldier(userId, burnSupportUnitId);
-        this.destroySoldiers([supportSoldier.id]);
-        burnedSupportId = supportSoldier.id;
-        movedSoldierIds.push(...selectedSoldiers.map((soldier) => soldier.id));
+        for (const bucket of reserves.filter((b) => b.type === 'SUPPORT')) {
+          const burned = Math.min(toBurn, bucket.count);
+          if (burned > 0) {
+            burnedSupportCount += burned;
+            bucket.count -= burned;
+            bucket.totalBs = Math.max(0, bucket.totalBs - (burned * bucket.totalBs) / Math.max(1, bucket.count + burned));
+            if (bucket.count <= 0) {
+              const idx = reserves.indexOf(bucket);
+              if (idx >= 0) reserves.splice(idx, 1);
+            }
+            toBurn -= burned;
+          }
+          if (toBurn <= 0) break;
+        }
+        movedComposition.push(...toMove);
       } else {
-        for (const soldier of selectedSoldiers) {
-          if (randomInt(100) < 40) {
-            lostSoldierIds.push(soldier.id);
-          } else {
-            movedSoldierIds.push(soldier.id);
+        // Apply 40% random losses (distributed by BS ratio)
+        const totalMoveBs = this.sumCompositionBs(toMove);
+        const lossBs = Math.ceil(totalMoveBs * 0.4);
+        const moveBs = totalMoveBs - lossBs;
+
+        // Allocate remaining BS proportionally across buckets
+        for (const bucket of toMove) {
+          const bucketShare = (bucket.totalBs / totalMoveBs) * moveBs;
+          const movedCount = Math.round((bucketShare / bucket.totalBs) * bucket.count);
+          const movedTotal = Math.round(bucketShare);
+          movedComposition.push({
+            type: bucket.type,
+            rarity: bucket.rarity,
+            skill: bucket.skill,
+            count: Math.max(0, movedCount),
+            totalBs: Math.max(0, movedTotal),
+          });
+
+          const lostCount = bucket.count - movedCount;
+          const lostTotal = bucket.totalBs - movedTotal;
+          if (lostCount > 0) {
+            lostComposition.push({
+              type: bucket.type,
+              rarity: bucket.rarity,
+              skill: bucket.skill,
+              count: Math.max(0, lostCount),
+              totalBs: Math.max(0, lostTotal),
+            });
           }
         }
       }
     } else {
-      movedSoldierIds.push(...selectedSoldiers.map((soldier) => soldier.id));
+      // HOME territory: move all
+      movedComposition.push(...toMove);
     }
 
-    if (lostSoldierIds.length > 0) {
-      this.destroySoldiers(lostSoldierIds);
+    // Remove losses and moved from reserves
+    if (lostComposition.length > 0) {
+      this.removeFromReserveComposition(userId, lostComposition,
+        lostComposition.reduce((s, b) => s + b.count, 0),
+        this.sumCompositionBs(lostComposition)
+      );
     }
-
-    if (movedSoldierIds.length > 0) {
-      const soldiersToMove = movedSoldierIds
-        .map((soldierId) => this.soldiers.get(soldierId))
-        .filter((soldier): soldier is Soldier => Boolean(soldier));
-      this.placeSoldiersIntoGarrison(soldiersToMove, targetH3Index);
+    if (movedComposition.length > 0) {
+      this.removeFromReserveComposition(userId, movedComposition,
+        movedComposition.reduce((s, b) => s + b.count, 0),
+        this.sumCompositionBs(movedComposition)
+      );
+      // Add to garrison
+      this.addToGarrisonComposition(targetH3Index, movedComposition);
     }
 
     this.touchHex(targetH3Index);
@@ -638,16 +684,15 @@ export class GameService {
     this.emitHexDetailUpdate(userId, targetH3Index);
 
     return {
-      burnedSupportUnitId: burnedSupportId,
-      lostSoldierIds,
-      movedSoldierIds,
+      burnedSupportCount,
+      lostComposition,
+      movedComposition,
       status: 'success',
     };
   }
 
   scoutHex(userId: string, body: Record<string, unknown>) {
     const targetH3Index = this.requireH3Index(body.targetH3Index, 'targetH3Index');
-    const scoutSoldierId = this.requireString(body.scoutSoldierId, 'scoutSoldierId');
     const hex = this.ensureHexRecord(targetH3Index);
 
     if (!hex.ownerId) {
@@ -662,14 +707,22 @@ export class GameService {
 
     this.assertPlayerStandingInHex(userId, targetH3Index);
 
-    const scout = this.requireReserveSupportSoldier(userId, scoutSoldierId, 'SCOUT');
-    if (scout.skill !== 'SCOUT') {
-      throw new BadRequestException('The selected support unit does not have the SCOUT skill.');
+    // Consume one SCOUT support unit from reserves
+    const reserves = this.playerArmies.get(userId) ?? [];
+    const scoutBucket = reserves.find((b) => b.type === 'SUPPORT' && b.skill === 'SCOUT');
+    if (!scoutBucket || scoutBucket.count < 1) {
+      throw new BadRequestException('No SCOUT support unit available in reserve.');
+    }
+    const scoutBs = Math.floor(scoutBucket.totalBs / scoutBucket.count);
+    scoutBucket.count -= 1;
+    scoutBucket.totalBs -= scoutBs;
+    if (scoutBucket.count <= 0) {
+      reserves.splice(reserves.indexOf(scoutBucket), 1);
     }
 
-    const defendingSoldiers = this.getGarrisonSoldiers(targetH3Index);
-    const hasJammer = defendingSoldiers.some((soldier) => soldier.skill === 'JAMMER');
-    const hasDecoy = defendingSoldiers.some((soldier) => soldier.skill === 'DECOY');
+    const garrisonComposition = hex.garrisonComposition;
+    const hasJammer = garrisonComposition.some((b) => b.skill === 'JAMMER');
+    const hasDecoy = garrisonComposition.some((b) => b.skill === 'DECOY');
     const actualDefenseBs = this.getEffectiveDefenseBs(targetH3Index);
 
     const payload: ScoutResultPayload = hasJammer
@@ -692,10 +745,10 @@ export class GameService {
 
   startAttack(userId: string, body: Record<string, unknown>) {
     const targetH3Index = this.requireH3Index(body.targetH3Index, 'targetH3Index');
-    const attackerSoldierIds = this.requireStringArray(
-      body.attackerSoldierIds,
-      'attackerSoldierIds',
-      { minLength: 1 },
+    const attackerComposition = this.requireCompositionArray(
+      body.attackerComposition,
+      'attackerComposition',
+      { minItems: 1 },
     );
     const hex = this.ensureHexRecord(targetH3Index);
 
@@ -710,29 +763,26 @@ export class GameService {
     }
 
     this.assertPlayerStandingInHex(userId, targetH3Index);
-    const attackerSoldiers = this.requireReserveSoldiers(
+
+    // Validate and immediately deduct from reserves (no per-soldier locking)
+    const toAttack = this.requireReserveComposition(userId, attackerComposition, 'attackerComposition');
+    this.removeFromReserveComposition(
       userId,
-      attackerSoldierIds,
-      'attackerSoldierIds',
+      toAttack,
+      toAttack.reduce((s, b) => s + b.count, 0),
+      this.sumCompositionBs(toAttack),
     );
 
     const battleId = randomUUID();
     const now = this.nowIso();
     const resolveAt = new Date(Date.now() + ATTACK_PREPARATION_MS).toISOString();
-    for (const soldier of attackerSoldiers) {
-      soldier.location = {
-        battleId,
-        kind: 'LOCKED_ATTACK',
-        targetH3Index,
-      };
-    }
 
     const timeoutHandle = setTimeout(() => {
       this.resolvePendingBattle(battleId);
     }, ATTACK_PREPARATION_MS);
 
     const pendingBattle: PendingBattle = {
-      attackerSoldierIds: attackerSoldierIds,
+      attackerComposition: toAttack,
       attackerUserId: userId,
       createdAt: now,
       defenderUserId: hex.ownerId,
@@ -764,16 +814,23 @@ export class GameService {
   }
 
   getArmyUpdate(userId: string): ArmyUpdatePayload {
-    const reserveSoldiers = this.getReserveSoldiers(userId);
-    const patrolCount = Array.from(this.soldiers.values()).filter(
-      (soldier) =>
-        soldier.ownerId === userId && soldier.location.kind === 'GARRISON',
-    ).length;
+    const reserveComposition = this.playerArmies.get(userId) ?? [];
+    const reserveCount = reserveComposition.reduce((sum, b) => sum + b.count, 0);
+    const reserveBs = this.sumCompositionBs(reserveComposition);
+
+    let patrolCount = 0;
+    let patrolBs = 0;
+    for (const hex of this.getOwnedHexes(userId)) {
+      for (const bucket of hex.garrisonComposition) {
+        patrolCount += bucket.count;
+        patrolBs += bucket.totalBs;
+      }
+    }
 
     return {
       patrolCount,
-      reserveBs: this.sumSoldierBs(reserveSoldiers),
-      reserveCount: reserveSoldiers.length,
+      reserveBs,
+      reserveCount,
     };
   }
 
@@ -813,17 +870,18 @@ export class GameService {
         throw new NotFoundException('Owned hexagon is missing a territory assignment.');
       }
 
-      const garrisonSoldiers = this.getGarrisonSoldiers(h3Index);
+      const garrisonComposition = hex.garrisonComposition;
+      const reserveComposition = this.playerArmies.get(userId) ?? [];
       return {
         backgroundBonusPercent: this.countOwnedNeighbors(userId, h3Index) * 100,
         garrison: {
-          soldierCount: garrisonSoldiers.length,
-          soldiers: garrisonSoldiers.map((soldier) => this.toSoldierView(soldier)),
-          totalBs: this.sumSoldierBs(garrisonSoldiers),
+          soldierCount: garrisonComposition.reduce((sum, b) => sum + b.count, 0),
+          composition: garrisonComposition,
+          totalBs: this.sumCompositionBs(garrisonComposition),
         },
         h3Index,
         isCenter: this.getUserOrThrow(userId).homeCenterH3Index === h3Index,
-        reserve: this.getReserveSoldiers(userId).map((soldier) => this.toSoldierView(soldier)),
+        reserve: reserveComposition,
         state: 'OWNED',
         territory: {
           id: territory.id,
@@ -834,12 +892,14 @@ export class GameService {
     }
 
     const owner = this.getUserOrThrow(hex.ownerId);
-    const reserveScouts = this.getReserveSoldiers(userId).some(
-      (soldier) => soldier.type === 'SUPPORT' && soldier.skill === 'SCOUT',
+    const reserveComposition = this.playerArmies.get(userId) ?? [];
+    const reserveScouts = reserveComposition.some(
+      (bucket) => bucket.type === 'SUPPORT' && bucket.skill === 'SCOUT',
     );
+    const reserveCount = reserveComposition.reduce((sum, b) => sum + b.count, 0);
 
     return {
-      canAttack: this.isPlayerStandingInHex(userId, h3Index) && this.getReserveSoldiers(userId).length > 0,
+      canAttack: this.isPlayerStandingInHex(userId, h3Index) && reserveCount > 0,
       canScout: this.isPlayerStandingInHex(userId, h3Index) && reserveScouts,
       fogOfWar: '??? BS',
       h3Index,
@@ -863,7 +923,7 @@ export class GameService {
     const owner = this.getUserOrThrow(hex.ownerId);
     return {
       color: owner.id === userId ? HOME_COLOR : ENEMY_COLOR,
-      hasGarrison: hex.garrisonSoldierIds.size > 0,
+      hasGarrison: hex.garrisonComposition.length > 0,
       h3Index,
       isCenter: owner.homeCenterH3Index === h3Index,
       ownerName: owner.nickname,
@@ -983,52 +1043,38 @@ export class GameService {
     const attacker = this.getUserOrThrow(battle.attackerUserId);
     const defender = this.getUserOrThrow(battle.defenderUserId);
     const targetHex = this.ensureHexRecord(battle.targetH3Index);
-    const attackerSoldiers = battle.attackerSoldierIds
-      .map((soldierId) => this.soldiers.get(soldierId))
-      .filter((soldier): soldier is Soldier => Boolean(soldier));
-    const defenderSoldiers = this.getGarrisonSoldiers(battle.targetH3Index);
-    const attackerTotalBs = this.sumSoldierBs(attackerSoldiers);
+
+    const attackerComposition = battle.attackerComposition;
+    const defenderComposition = [...targetHex.garrisonComposition];
+
+    const attackerTotalBs = this.sumCompositionBs(attackerComposition);
     const defenseMultiplier = this.countOwnedNeighbors(defender.id, battle.targetH3Index) + 1;
-    const defenderBaseBs = this.sumSoldierBs(defenderSoldiers);
+    const defenderBaseBs = this.sumCompositionBs(defenderComposition);
     const defenderEffectiveBs = defenderBaseBs * defenseMultiplier;
     const attackerWins = attackerTotalBs > defenderEffectiveBs;
 
     const attackerCenterBefore = attacker.homeCenterH3Index;
     const defenderCenterBefore = defender.homeCenterH3Index;
 
+    const attackerTotalCount = attackerComposition.reduce((s, b) => s + b.count, 0);
+    const defenderTotalCount = defenderComposition.reduce((s, b) => s + b.count, 0);
+
     if (attackerWins) {
       const remainingAttackerBs = Math.max(1, attackerTotalBs - defenderEffectiveBs);
-      const attackerSurvivors = this.projectSurvivors(
-        attackerSoldiers,
+      const attackerSurvivorComposition = this.projectSurvivorsComposition(
+        attackerComposition,
         remainingAttackerBs,
       );
-      const attackerSurvivorIds = new Set(attackerSurvivors.map((soldier) => soldier.id));
-      const attackerDeadCount = attackerSoldiers.length - attackerSurvivors.length;
-      const defenderDeadCount = defenderSoldiers.length;
+      const attackerSurvivorCount = attackerSurvivorComposition.reduce((s, b) => s + b.count, 0);
+      const attackerDeadCount = attackerTotalCount - attackerSurvivorCount;
+      const defenderDeadCount = defenderTotalCount;
 
-      this.destroySoldiers(defenderSoldiers.map((soldier) => soldier.id));
-      this.destroySoldiers(
-        attackerSoldiers
-          .filter((soldier) => !attackerSurvivorIds.has(soldier.id))
-          .map((soldier) => soldier.id),
-      );
-
+      // Defender garrison fully wiped
+      targetHex.garrisonComposition = [];
+      // Attacker survivors placed in garrison
       targetHex.ownerId = attacker.id;
       targetHex.territoryId = null;
-      targetHex.garrisonSoldierIds = new Set<string>();
-      for (const survivor of attackerSurvivors) {
-        const soldier = this.soldiers.get(survivor.id);
-        if (!soldier) {
-          continue;
-        }
-
-        soldier.bs = survivor.bs;
-        soldier.location = {
-          h3Index: battle.targetH3Index,
-          kind: 'GARRISON',
-        };
-        targetHex.garrisonSoldierIds.add(soldier.id);
-      }
+      targetHex.garrisonComposition = attackerSurvivorComposition;
       this.touchHex(battle.targetH3Index);
 
       attacker.stats.hexesClaimed += 1;
@@ -1046,29 +1092,14 @@ export class GameService {
         createsOutpost ? { createdHex: battle.targetH3Index } : undefined,
       );
 
-      this.recordAttackLog(
-        attacker.id,
-        battle.targetH3Index,
-        'VICTORY',
-        attackerDeadCount,
-        attackerSurvivors.length,
-      );
-      this.recordAttackLog(
-        defender.id,
-        battle.targetH3Index,
-        'DEFEAT',
-        defenderDeadCount,
-        0,
-      );
+      this.recordAttackLog(attacker.id, battle.targetH3Index, 'VICTORY', attackerDeadCount, attackerSurvivorCount);
+      this.recordAttackLog(defender.id, battle.targetH3Index, 'DEFEAT', defenderDeadCount, 0);
 
       this.emitUserEvent(attacker.id, 'battle_result', {
         battleId,
         h3Index: battle.targetH3Index,
         myDeadCount: attackerDeadCount,
-        mySurvivors: attackerSurvivors.map((survivor) => ({
-          bs: survivor.bs,
-          id: survivor.id,
-        })),
+        mySurvivors: attackerSurvivorComposition,
         result: 'VICTORY',
       } satisfies BattleResultPayload);
       this.emitUserEvent(defender.id, 'battle_result', {
@@ -1086,35 +1117,16 @@ export class GameService {
         1,
         Math.ceil((defenderEffectiveBs - attackerTotalBs) / defenseMultiplier),
       );
-      const defenderSurvivors = this.projectSurvivors(
-        defenderSoldiers,
+      const defenderSurvivorComposition = this.projectSurvivorsComposition(
+        defenderComposition,
         remainingDefenderBs,
       );
-      const defenderSurvivorIds = new Set(defenderSurvivors.map((soldier) => soldier.id));
-      const defenderDeadCount = defenderSoldiers.length - defenderSurvivors.length;
-      const attackerDeadCount = attackerSoldiers.length;
+      const defenderSurvivorCount = defenderSurvivorComposition.reduce((s, b) => s + b.count, 0);
+      const defenderDeadCount = defenderTotalCount - defenderSurvivorCount;
+      const attackerDeadCount = attackerTotalCount;
 
-      this.destroySoldiers(attackerSoldiers.map((soldier) => soldier.id));
-      this.destroySoldiers(
-        defenderSoldiers
-          .filter((soldier) => !defenderSurvivorIds.has(soldier.id))
-          .map((soldier) => soldier.id),
-      );
-
-      targetHex.garrisonSoldierIds = new Set<string>();
-      for (const survivor of defenderSurvivors) {
-        const soldier = this.soldiers.get(survivor.id);
-        if (!soldier) {
-          continue;
-        }
-
-        soldier.bs = survivor.bs;
-        soldier.location = {
-          h3Index: battle.targetH3Index,
-          kind: 'GARRISON',
-        };
-        targetHex.garrisonSoldierIds.add(soldier.id);
-      }
+      // Replace garrison with survivors
+      targetHex.garrisonComposition = defenderSurvivorComposition;
       this.touchHex(battle.targetH3Index);
 
       this.updateWinningBattleStat(
@@ -1122,20 +1134,8 @@ export class GameService {
         Math.max(attackerTotalBs, defenderEffectiveBs),
       );
 
-      this.recordAttackLog(
-        attacker.id,
-        battle.targetH3Index,
-        'DEFEAT',
-        attackerDeadCount,
-        0,
-      );
-      this.recordAttackLog(
-        defender.id,
-        battle.targetH3Index,
-        'VICTORY',
-        defenderDeadCount,
-        defenderSurvivors.length,
-      );
+      this.recordAttackLog(attacker.id, battle.targetH3Index, 'DEFEAT', attackerDeadCount, 0);
+      this.recordAttackLog(defender.id, battle.targetH3Index, 'VICTORY', defenderDeadCount, defenderSurvivorCount);
 
       this.emitUserEvent(attacker.id, 'battle_result', {
         battleId,
@@ -1148,10 +1148,7 @@ export class GameService {
         battleId,
         h3Index: battle.targetH3Index,
         myDeadCount: defenderDeadCount,
-        mySurvivors: defenderSurvivors.map((survivor) => ({
-          bs: survivor.bs,
-          id: survivor.id,
-        })),
+        mySurvivors: defenderSurvivorComposition,
         result: 'VICTORY',
       } satisfies BattleResultPayload);
     }
@@ -1176,69 +1173,47 @@ export class GameService {
     this.emitHexDetailUpdate(defender.id, battle.targetH3Index);
   }
 
-  private projectSurvivors(soldiers: Soldier[], remainingTotalBs: number): SoldierView[] {
-    if (soldiers.length === 0) {
-      return [];
+  private projectSurvivorsComposition(
+    composition: SoldierBucket[],
+    remainingTotalBs: number,
+  ): SoldierBucket[] {
+    const totalBs = this.sumCompositionBs(composition);
+    if (totalBs <= 0 || composition.length === 0) return [];
+
+    const clamped = Math.max(1, Math.min(Math.round(remainingTotalBs), totalBs));
+
+    // Allocate remaining BS proportionally across buckets
+    let assigned = 0;
+    const result: Array<{ bucket: SoldierBucket; newTotalBs: number; fraction: number }> = [];
+
+    for (const bucket of composition) {
+      const exact = (bucket.totalBs / totalBs) * clamped;
+      const floor = Math.floor(exact);
+      result.push({ bucket, newTotalBs: floor, fraction: exact - floor });
+      assigned += floor;
     }
 
-    const totalBs = this.sumSoldierBs(soldiers);
-    if (totalBs <= 0) {
-      return [];
+    // Distribute remainder by largest fractional parts
+    const remainder = clamped - assigned;
+    result.sort((a, b) => b.fraction - a.fraction || b.bucket.totalBs - a.bucket.totalBs);
+    for (let i = 0; i < remainder; i++) {
+      result[i % result.length].newTotalBs += 1;
     }
 
-    const clampedRemainingBs = Math.max(
-      1,
-      Math.min(Math.round(remainingTotalBs), totalBs),
-    );
-    const allocations = soldiers.map((soldier) => {
-      const exactShare = (soldier.bs / totalBs) * clampedRemainingBs;
-      return {
-        bs: Math.floor(exactShare),
-        fraction: exactShare - Math.floor(exactShare),
-        soldier,
-      };
-    });
-
-    let assignedBs = allocations.reduce((sum, entry) => sum + entry.bs, 0);
-    const ranked = [...allocations].sort(
-      (left, right) =>
-        right.fraction - left.fraction || right.soldier.bs - left.soldier.bs,
-    );
-
-    let cursor = 0;
-    while (assignedBs < clampedRemainingBs && ranked.length > 0) {
-      ranked[cursor % ranked.length].bs += 1;
-      assignedBs += 1;
-      cursor += 1;
-    }
-
-    return allocations
-      .filter((entry) => entry.bs > 0)
-      .map((entry) => ({
-        bs: entry.bs,
-        id: entry.soldier.id,
-        rarity: entry.soldier.rarity,
-        skill: entry.soldier.skill,
-        type: entry.soldier.type,
-      }))
-      .sort((left, right) => right.bs - left.bs || left.id.localeCompare(right.id));
-  }
-
-  private placeSoldiersIntoGarrison(soldiers: Soldier[], h3Index: string): void {
-    const hex = this.ensureHexRecord(h3Index);
-    for (const soldier of soldiers) {
-      soldier.location = {
-        h3Index,
-        kind: 'GARRISON',
-      };
-      hex.garrisonSoldierIds.add(soldier.id);
-    }
-  }
-
-  private moveSoldiersToReserve(soldiers: Soldier[]): void {
-    for (const soldier of soldiers) {
-      soldier.location = { kind: 'RESERVE' };
-    }
+    return result
+      .map(({ bucket, newTotalBs }) => {
+        if (newTotalBs <= 0) return null;
+        // Proportionally scale count
+        const newCount = Math.max(1, Math.round((newTotalBs / bucket.totalBs) * bucket.count));
+        return {
+          type: bucket.type,
+          rarity: bucket.rarity,
+          skill: bucket.skill,
+          count: newCount,
+          totalBs: newTotalBs,
+        } satisfies SoldierBucket;
+      })
+      .filter((b): b is SoldierBucket => b !== null);
   }
 
   private recordAttackLog(
@@ -1346,16 +1321,6 @@ export class GameService {
     return battle;
   }
 
-  private getEffectiveDefenseBs(h3Index: string): number {
-    const hex = this.ensureHexRecord(h3Index);
-    if (!hex.ownerId) {
-      return 0;
-    }
-
-    const baseBs = this.sumSoldierBs(this.getGarrisonSoldiers(h3Index));
-    return baseBs * (this.countOwnedNeighbors(hex.ownerId, h3Index) + 1);
-  }
-
   private countOwnedNeighbors(ownerId: string, h3Index: string): number {
     return this.getNeighborIndexes(h3Index).filter(
       (neighbor) => this.hexes.get(neighbor)?.ownerId === ownerId,
@@ -1427,12 +1392,11 @@ export class GameService {
     return gridDisk(h3Index, 1).filter((candidate) => candidate !== h3Index);
   }
 
-  private getGarrisonSoldiers(h3Index: string): Soldier[] {
+  private getEffectiveDefenseBs(h3Index: string): number {
     const hex = this.ensureHexRecord(h3Index);
-    return [...hex.garrisonSoldierIds]
-      .map((soldierId) => this.soldiers.get(soldierId))
-      .filter((soldier): soldier is Soldier => Boolean(soldier))
-      .sort((left, right) => right.bs - left.bs || left.id.localeCompare(right.id));
+    if (!hex.ownerId) return 0;
+    const baseBs = this.sumCompositionBs(hex.garrisonComposition);
+    return baseBs * (this.countOwnedNeighbors(hex.ownerId, h3Index) + 1);
   }
 
   private getHomeTerritory(userId: string): TerritoryRecord | null {
@@ -1479,15 +1443,6 @@ export class GameService {
     return [...this.territories.values()]
       .filter((territory) => territory.ownerId === userId)
       .sort((left, right) => left.name.localeCompare(right.name));
-  }
-
-  private getReserveSoldiers(userId: string): Soldier[] {
-    return [...this.soldiers.values()]
-      .filter(
-        (soldier) =>
-          soldier.ownerId === userId && soldier.location.kind === 'RESERVE',
-      )
-      .sort((left, right) => right.bs - left.bs || left.id.localeCompare(right.id));
   }
 
   private getTerritoryForHex(h3Index: string): TerritoryRecord | null {
@@ -1554,22 +1509,6 @@ export class GameService {
     return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  private destroySoldiers(soldierIds: string[]): void {
-    for (const soldierId of new Set(soldierIds)) {
-      const soldier = this.soldiers.get(soldierId);
-      if (!soldier) {
-        continue;
-      }
-
-      if (soldier.location.kind === 'GARRISON') {
-        const hex = this.hexes.get(soldier.location.h3Index);
-        hex?.garrisonSoldierIds.delete(soldierId);
-      }
-
-      this.soldiers.delete(soldierId);
-    }
-  }
-
   private ensureHexRecord(h3Index: string): HexRecord {
     const existingHex = this.hexes.get(h3Index);
     if (existingHex) {
@@ -1578,7 +1517,7 @@ export class GameService {
 
     const createdHex: HexRecord = {
       changedAt: this.nowIso(),
-      garrisonSoldierIds: new Set<string>(),
+      garrisonComposition: [],
       h3Index,
       ownerId: null,
       territoryId: null,
@@ -1594,12 +1533,6 @@ export class GameService {
     }
   }
 
-
-  private moveLocationOrThrow(location: SoldierLocation, expectedKind: SoldierLocation['kind']) {
-    if (location.kind !== expectedKind) {
-      throw new BadRequestException(`Soldier is not in ${expectedKind.toLowerCase()}.`);
-    }
-  }
 
   private normalizeNickname(nickname: string): string {
     return nickname.trim().toLocaleLowerCase();
@@ -1620,6 +1553,18 @@ export class GameService {
 
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private optionalPositiveInteger(value: unknown): number | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new BadRequestException('Expected a positive integer value.');
+    }
+
+    return value;
   }
 
   private optionalTerritoryName(value: unknown): string | null {
@@ -1655,7 +1600,7 @@ export class GameService {
   private requireCalculatedSoldier(
     value: unknown,
     fieldName: string,
-  ): Pick<Soldier, 'bs' | 'rarity' | 'skill' | 'type'> {
+  ): { bs: number; rarity: SoldierRarity; skill: SoldierSkill; type: SoldierType } {
     if (!value || typeof value !== 'object') {
       throw new BadRequestException(`${fieldName} must be an object.`);
     }
@@ -1700,29 +1645,16 @@ export class GameService {
     return value as T;
   }
 
-  private requireGarrisonSoldiers(
-    userId: string,
-    h3Index: string,
-    soldierIds: string[],
-    fieldName: string,
-  ): Soldier[] {
-    const soldiers = soldierIds.map((soldierId) => {
-      const soldier = this.soldiers.get(soldierId);
-      if (!soldier || soldier.ownerId !== userId) {
-        throw new BadRequestException(`${fieldName} contains a soldier the player does not own.`);
-      }
+  private requireSoldierSkill(value: unknown, fieldName: string): SoldierSkill {
+    if (value === null || value === undefined) {
+      return null;
+    }
 
-      if (soldier.location.kind !== 'GARRISON') {
-        throw new BadRequestException(`${fieldName} contains a soldier that is not in a garrison.`);
-      }
-      if (soldier.location.h3Index !== h3Index) {
-        throw new BadRequestException(`${fieldName} contains a soldier from a different garrison.`);
-      }
-
-      return soldier;
-    });
-
-    return soldiers;
+    return this.requireEnum<Exclude<SoldierSkill, null>>(
+      value,
+      ['SCOUT', 'JAMMER', 'DECOY'],
+      fieldName,
+    );
   }
 
   private requireH3Index(value: unknown, fieldName: string): string {
@@ -1763,57 +1695,6 @@ export class GameService {
     return value;
   }
 
-  private requireReserveSoldiers(
-    userId: string,
-    soldierIds: string[],
-    fieldName: string,
-  ): Soldier[] {
-    const soldiers = soldierIds.map((soldierId) => {
-      const soldier = this.soldiers.get(soldierId);
-      if (!soldier || soldier.ownerId !== userId) {
-        throw new BadRequestException(`${fieldName} contains a soldier the player does not own.`);
-      }
-
-      this.moveLocationOrThrow(soldier.location, 'RESERVE');
-      return soldier;
-    });
-
-    return soldiers;
-  }
-
-  private requireReserveSupportSoldier(
-    userId: string,
-    soldierId: string,
-    requiredSkill?: Exclude<SoldierSkill, null>,
-  ): Soldier {
-    const soldier = this.soldiers.get(soldierId);
-    if (!soldier || soldier.ownerId !== userId) {
-      throw new BadRequestException('The support unit was not found in the player reserve.');
-    }
-
-    this.moveLocationOrThrow(soldier.location, 'RESERVE');
-    if (soldier.type !== 'SUPPORT') {
-      throw new BadRequestException('The selected soldier is not a support unit.');
-    }
-    if (requiredSkill && soldier.skill !== requiredSkill) {
-      throw new BadRequestException(`The selected support unit must have the ${requiredSkill} skill.`);
-    }
-
-    return soldier;
-  }
-
-  private requireSoldierSkill(value: unknown, fieldName: string): SoldierSkill {
-    if (value === null || value === undefined) {
-      return null;
-    }
-
-    return this.requireEnum<Exclude<SoldierSkill, null>>(
-      value,
-      ['SCOUT', 'JAMMER', 'DECOY'],
-      fieldName,
-    );
-  }
-
   private requireString(value: unknown, fieldName: string): string {
     if (typeof value !== 'string' || value.trim().length === 0) {
       throw new BadRequestException(`${fieldName} must be a non-empty string.`);
@@ -1852,19 +1733,210 @@ export class GameService {
     return name;
   }
 
-  private sumSoldierBs(soldiers: Soldier[]): number {
-    return soldiers.reduce((sum, soldier) => sum + soldier.bs, 0);
+  private requireCompositionArray(
+    value: unknown,
+    fieldName: string,
+    options?: { minItems?: number },
+  ): SoldierBucket[] {
+    if (!Array.isArray(value)) {
+      throw new BadRequestException(`${fieldName} must be an array of composition buckets.`);
+    }
+
+    const composition: SoldierBucket[] = [];
+    for (const item of value) {
+      if (!item || typeof item !== 'object') {
+        throw new BadRequestException(`${fieldName} contains invalid bucket.`);
+      }
+
+      const bucket = item as Record<string, unknown>;
+      const type = this.requireEnum<SoldierType>(
+        bucket.type,
+        ['WARRIOR', 'SUPPORT'],
+        `${fieldName}[].type`,
+      );
+      const rarity = this.requireEnum<SoldierRarity>(
+        bucket.rarity,
+        ['STANDARD', 'ADVANCED', 'PROTOTYPE'],
+        `${fieldName}[].rarity`,
+      );
+      const skill = this.requireSoldierSkill(bucket.skill, `${fieldName}[].skill`);
+      const count = this.requirePositiveInteger(bucket.count, `${fieldName}[].count`);
+      const totalBs = this.requirePositiveInteger(bucket.totalBs, `${fieldName}[].totalBs`);
+
+      if (type === 'WARRIOR' && skill !== null) {
+        throw new BadRequestException(`${fieldName}: Warrior units must not define a support skill.`);
+      }
+
+      composition.push({ type, rarity, skill, count, totalBs });
+    }
+
+    if (options?.minItems && composition.length < options.minItems) {
+      throw new BadRequestException(
+        `${fieldName} must contain at least ${options.minItems} item(s).`,
+      );
+    }
+
+    return composition;
   }
 
-  private toSoldierView(soldier: Soldier): SoldierView {
-    return {
-      bs: soldier.bs,
-      id: soldier.id,
-      rarity: soldier.rarity,
-      skill: soldier.skill,
-      type: soldier.type,
-    };
+  private requireReserveComposition(
+    userId: string,
+    requested: SoldierBucket[],
+    fieldName: string,
+  ): SoldierBucket[] {
+    const reserves = this.playerArmies.get(userId) ?? [];
+    const result: SoldierBucket[] = [];
+
+    for (const requestBucket of requested) {
+      const matchingBucket = reserves.find(
+        (b) => b.type === requestBucket.type && b.rarity === requestBucket.rarity && b.skill === requestBucket.skill,
+      );
+
+      if (!matchingBucket || matchingBucket.count < requestBucket.count || matchingBucket.totalBs < requestBucket.totalBs) {
+        throw new BadRequestException(
+          `${fieldName}: insufficient soldiers of type ${requestBucket.type} / ${requestBucket.rarity} / ${requestBucket.skill}.`,
+        );
+      }
+
+      result.push({ ...requestBucket });
+    }
+
+    return result;
   }
+
+  private requireGarrisonComposition(
+    userId: string,
+    h3Index: string,
+    requested: SoldierBucket[],
+    fieldName: string,
+  ): SoldierBucket[] {
+    const hex = this.hexes.get(h3Index);
+    if (!hex) {
+      throw new BadRequestException(`${fieldName}: hexagon not found.`);
+    }
+
+    const result: SoldierBucket[] = [];
+
+    for (const requestBucket of requested) {
+      const matchingBucket = hex.garrisonComposition.find(
+        (b) => b.type === requestBucket.type && b.rarity === requestBucket.rarity && b.skill === requestBucket.skill,
+      );
+
+      if (!matchingBucket || matchingBucket.count < requestBucket.count || matchingBucket.totalBs < requestBucket.totalBs) {
+        throw new BadRequestException(
+          `${fieldName}: insufficient soldiers of type ${requestBucket.type} / ${requestBucket.rarity} / ${requestBucket.skill} in garrison.`,
+        );
+      }
+
+      result.push({ ...requestBucket });
+    }
+
+    return result;
+  }
+
+  private addToReserveComposition(userId: string, composition: SoldierBucket[]): void {
+    let reserves = this.playerArmies.get(userId);
+    if (!reserves) {
+      reserves = [];
+      this.playerArmies.set(userId, reserves);
+    }
+
+    for (const bucket of composition) {
+      const existing = reserves.find(
+        (b) => b.type === bucket.type && b.rarity === bucket.rarity && b.skill === bucket.skill,
+      );
+      if (existing) {
+        existing.count += bucket.count;
+        existing.totalBs += bucket.totalBs;
+      } else {
+        reserves.push({ ...bucket });
+      }
+    }
+  }
+
+  private sumCompositionBs(composition: SoldierBucket[]): number {
+    return composition.reduce((sum, bucket) => sum + bucket.totalBs, 0);
+  }
+
+  private getOrCreateReserveBucket(userId: string, key: { type: SoldierType; rarity: SoldierRarity; skill: SoldierSkill }): SoldierBucket {
+    let composition = this.playerArmies.get(userId);
+    if (!composition) {
+      composition = [];
+      this.playerArmies.set(userId, composition);
+    }
+
+    let bucket = composition.find(
+      (b) => b.type === key.type && b.rarity === key.rarity && b.skill === key.skill,
+    );
+
+    if (!bucket) {
+      bucket = {
+        type: key.type,
+        rarity: key.rarity,
+        skill: key.skill,
+        count: 0,
+        totalBs: 0,
+      };
+      composition.push(bucket);
+    }
+
+    return bucket;
+  }
+
+  private removeFromReserveComposition(userId: string, composition: SoldierBucket[], removeCount: number, removeTotalBs: number): void {
+    if (removeCount <= 0 || composition.length === 0) return;
+
+    const reserves = this.playerArmies.get(userId);
+    if (!reserves) return;
+
+    // Find and remove from matching composition
+    for (const bucket of composition) {
+      const idx = reserves.findIndex(
+        (b) => b.type === bucket.type && b.rarity === bucket.rarity && b.skill === bucket.skill,
+      );
+      if (idx >= 0) {
+        reserves[idx].count = Math.max(0, reserves[idx].count - bucket.count);
+        reserves[idx].totalBs = Math.max(0, reserves[idx].totalBs - bucket.totalBs);
+        if (reserves[idx].count <= 0) {
+          reserves.splice(idx, 1);
+        }
+      }
+    }
+  }
+
+  private addToGarrisonComposition(h3Index: string, composition: SoldierBucket[]): void {
+    const hex = this.ensureHexRecord(h3Index);
+    for (const bucket of composition) {
+      const existing = hex.garrisonComposition.find(
+        (b) => b.type === bucket.type && b.rarity === bucket.rarity && b.skill === bucket.skill,
+      );
+      if (existing) {
+        existing.count += bucket.count;
+        existing.totalBs += bucket.totalBs;
+      } else {
+        hex.garrisonComposition.push({ ...bucket });
+      }
+    }
+  }
+
+  private removeFromGarrisonComposition(h3Index: string, composition: SoldierBucket[]): void {
+    const hex = this.hexes.get(h3Index);
+    if (!hex) return;
+
+    for (const bucket of composition) {
+      const idx = hex.garrisonComposition.findIndex(
+        (b) => b.type === bucket.type && b.rarity === bucket.rarity && b.skill === bucket.skill,
+      );
+      if (idx >= 0) {
+        hex.garrisonComposition[idx].count = Math.max(0, hex.garrisonComposition[idx].count - bucket.count);
+        hex.garrisonComposition[idx].totalBs = Math.max(0, hex.garrisonComposition[idx].totalBs - bucket.totalBs);
+        if (hex.garrisonComposition[idx].count <= 0) {
+          hex.garrisonComposition.splice(idx, 1);
+        }
+      }
+    }
+  }
+
 
   private touchHex(h3Index: string): void {
     this.ensureHexRecord(h3Index).changedAt = this.nowIso();

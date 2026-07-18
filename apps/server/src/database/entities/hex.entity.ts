@@ -13,8 +13,10 @@ export class HexEntity {
   @Column('uuid', { nullable: true })
   territoryId!: string | null;
 
-  @Column('simple-array', { default: '[]' })
-  garrisonSoldierIds!: string[];
+  // Aggregated garrison composition: array of buckets { type, rarity, skill, count, totalBs }
+  // Using JSONB to store aggregated counts instead of individual soldier IDs.
+  @Column('jsonb', { default: () => "'[]'::jsonb" })
+  garrisonComposition!: any[];
 
   @Column('timestamp', { default: () => 'CURRENT_TIMESTAMP' })
   changedAt!: Date;

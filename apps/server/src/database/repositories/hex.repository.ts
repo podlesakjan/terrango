@@ -36,21 +36,11 @@ export class HexRepository {
   }
 
   async addGarrisonSoldier(h3Index: string, soldierId: string): Promise<void> {
-    const hex = await this.findByH3Index(h3Index);
-    if (!hex) return;
-
-    const soldiers = new Set(hex.garrisonSoldierIds || []);
-    soldiers.add(soldierId);
-    await this.update(h3Index, { garrisonSoldierIds: Array.from(soldiers) });
+    throw new Error('addGarrisonSoldier is deprecated; use addGarrisonComposition');
   }
 
   async removeGarrisonSoldier(h3Index: string, soldierId: string): Promise<void> {
-    const hex = await this.findByH3Index(h3Index);
-    if (!hex) return;
-
-    const soldiers = new Set(hex.garrisonSoldierIds || []);
-    soldiers.delete(soldierId);
-    await this.update(h3Index, { garrisonSoldierIds: Array.from(soldiers) });
+    throw new Error('removeGarrisonSoldier is deprecated; use removeGarrisonComposition');
   }
 
   async getOrCreate(h3Index: string): Promise<HexEntity> {
@@ -61,8 +51,45 @@ export class HexRepository {
       h3Index,
       ownerId: null,
       territoryId: null,
-      garrisonSoldierIds: [],
+      garrisonComposition: [],
     });
+  }
+
+  // New API for aggregated composition buckets
+  async addGarrisonComposition(h3Index: string, bucket: { type: string; rarity: string; skill: string | null; count: number; totalBs: number; }): Promise<void> {
+    const hex = await this.getOrCreate(h3Index);
+    const list: any[] = Array.isArray(hex.garrisonComposition) ? hex.garrisonComposition : [];
+
+    const idx = list.findIndex(
+      (b) => b.type === bucket.type && b.rarity === bucket.rarity && b.skill === bucket.skill,
+    );
+
+    if (idx === -1) {
+      list.push({ ...bucket });
+    } else {
+      list[idx].count = (list[idx].count || 0) + bucket.count;
+      list[idx].totalBs = (list[idx].totalBs || 0) + bucket.totalBs;
+    }
+
+    await this.update(h3Index, { garrisonComposition: list });
+  }
+
+  async removeGarrisonComposition(h3Index: string, bucketKey: { type: string; rarity: string; skill: string | null; }, removeCount: number, removeTotalBs?: number): Promise<void> {
+    const hex = await this.findByH3Index(h3Index);
+    if (!hex) return;
+
+    const list: any[] = Array.isArray(hex.garrisonComposition) ? hex.garrisonComposition : [];
+    const idx = list.findIndex((b) => b.type === bucketKey.type && b.rarity === bucketKey.rarity && b.skill === bucketKey.skill);
+    if (idx === -1) return;
+
+    list[idx].count = (list[idx].count || 0) - removeCount;
+    if (removeTotalBs) list[idx].totalBs = (list[idx].totalBs || 0) - removeTotalBs;
+
+    if (list[idx].count <= 0) {
+      list.splice(idx, 1);
+    }
+
+    await this.update(h3Index, { garrisonComposition: list });
   }
 }
 

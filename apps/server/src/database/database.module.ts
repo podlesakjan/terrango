@@ -4,7 +4,7 @@ import {
   BattleLogEntity,
   BluetoothScanEntity,
   HexEntity,
-  SoldierEntity,
+  PlayerArmyEntity,
   TerritoryEntity,
   UserEntity,
 } from './entities';
@@ -12,7 +12,7 @@ import {
   BattleLogRepository,
   BluetoothScanRepository,
   HexRepository,
-  SoldierRepository,
+  PlayerArmyRepository,
   TerritoryRepository,
   UserRepository,
 } from './repositories';
@@ -28,8 +28,8 @@ import {
       database: process.env.DB_NAME ?? 'terrango',
       entities: [
         UserEntity,
-        SoldierEntity,
         HexEntity,
+        PlayerArmyEntity,
         TerritoryEntity,
         BluetoothScanEntity,
         BattleLogEntity,
@@ -39,8 +39,8 @@ import {
     }),
     TypeOrmModule.forFeature([
       UserEntity,
-      SoldierEntity,
       HexEntity,
+      PlayerArmyEntity,
       TerritoryEntity,
       BluetoothScanEntity,
       BattleLogEntity,
@@ -48,8 +48,8 @@ import {
   ],
   providers: [
     UserRepository,
-    SoldierRepository,
     HexRepository,
+    PlayerArmyRepository,
     TerritoryRepository,
     BattleLogRepository,
     BluetoothScanRepository,
@@ -57,8 +57,8 @@ import {
   exports: [
     TypeOrmModule,
     UserRepository,
-    SoldierRepository,
     HexRepository,
+    PlayerArmyRepository,
     TerritoryRepository,
     BattleLogRepository,
     BluetoothScanRepository,

@@ -3,7 +3,7 @@
 ## Co bylo implementováno
 
 ### 1. **Database Layer** (PostgreSQL + TypeORM)
-- ✅ 6 TypeORM entities (User, Soldier, Hex, Territory, BattleLog, BluetoothScan)
+- ✅ 6 TypeORM entities (User, PlayerArmy, Hex, Territory, BattleLog, BluetoothScan)
 - ✅ 6 Repository klasů pro data access
 - ✅ Auto-sync databáze v dev režimu
 - ✅ Pro-prod ready databázová konfigurace
@@ -55,7 +55,7 @@ apps/server/
 │   │   ├── bearer-auth.guard.ts   # HTTP request guard
 │   │   └── current-player.decorator.ts
 │   ├── database/
-│   │   ├── entities/              # TypeORM entities (6x)
+│   │   ├── entities/              # TypeORM entities (6x, bez legacy Soldier)
 │   │   ├── repositories/          # Data access layer (6x)
 │   │   └── database.module.ts
 │   ├── game/
@@ -181,7 +181,7 @@ curl -X POST http://localhost:3000/api/v1/auth/register \
 ```sql
 -- Automaticky vytvořeno TypeORM
 users (providerId, nickname uniq)
-soldiers (owner_id FK)
+player_armies (owner_id uniq)
 hexes (h3Index PK)
 territories (owner_id FK)
 battle_logs (user_id, timestamp)
