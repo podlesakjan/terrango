@@ -1,5 +1,7 @@
 node_modules
 dist
+coverage
+build
 .git
 .gitignore
 npm-debug.log
@@ -10,4 +12,5 @@ SETUP.md
 COMPLETION.md
 .env
 .env.*
+!.env.example
 

@@ -150,14 +150,19 @@ See `.env.example` for all available options:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `DATABASE_URL` | - | Full PostgreSQL connection string for managed deployments |
 | `DB_HOST` | localhost | PostgreSQL host |
 | `DB_PORT` | 5432 | PostgreSQL port |
 | `DB_USER` | terrango | PostgreSQL user |
 | `DB_PASSWORD` | terrango | PostgreSQL password |
 | `DB_NAME` | terrango | PostgreSQL database |
+| `DB_SSL` | false | Enable SSL for PostgreSQL connections |
 | `REDIS_URL` | redis://localhost:6379 | Redis connection URL |
 | `JWT_SECRET` | terrango-dev-secret | Secret for JWT signing (⚠️ change in production!) |
 | `NODE_ENV` | development | Environment mode |
+
+> In production, set `DATABASE_URL` or the full `DB_*` set explicitly.
+> The `localhost` defaults are intended only for local development.
 
 ## Architecture Highlights
 
