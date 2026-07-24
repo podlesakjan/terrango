@@ -346,7 +346,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `send_reinforcements`**
-    *   **Usage:** Logistics and remote defense. Sending immediate reinforcements from reserves to a sector under attack.
+    *   **Usage:** Logistics and remote defense. Sending immediate reinforcements from reserves to any owned sector.
     *   **Payload:**
         ```json
         {

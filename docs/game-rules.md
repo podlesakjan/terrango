@@ -14,7 +14,7 @@
 
 ### 3. Attack and Accessibility Rules
 *   **Free (Gray) Hexagon:** You arrive at the location and instantly claim it. It does not need to neighbor anything you already own.
-*   **Occupied (Enemy) Hexagon:** You can attack it with your entire current army (reserve), provided you are physically standing in it.
+*   **Occupied (Enemy) Hexagon:** You can attack it with your entire or part of current army (reserve), provided you are physically standing in it.
 *   **Consequence:** The adjacency rule does not apply to attacks. A new player can arrive and attack any hexagon on the map – including those lying deep inside someone else's territory. No territory is 100% impenetrable, which prevents older players from locking down the map.
 
 ### 4. Espionage and Fog of War
@@ -24,7 +24,7 @@
 
 ### 5. Logistics and Remote Defense (Without Physical Presence)
 When an enemy attacks your territory, you can respond remotely from your reserve:
-*   **To Home Territory:** You transfer reinforcements from your home reserve to the garrison of the attacked sector instantly and for free.
+*   **To Home Territory:** You transfer reinforcements from your home reserve to the garrison of any own sector instantly and for free.
 *   **To Outpost Territory (Transmission Toll):** You can also send reinforcements instantly, but it costs a sacrifice because data is transmitted through foreign territory:
     *   **Support Sacrifice:** You must permanently destroy (burn) one Support unit from your reserve as fuel to send the selected Warriors in full numbers.
     *   **Percentage Losses:** If you do not sacrifice a Support unit, the system takes a transmission tax (e.g., 40% of the sent soldiers randomly perish during transit).

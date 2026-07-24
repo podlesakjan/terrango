@@ -17,6 +17,11 @@ Key Elements on the Screen:
 *   **Hexagon Context Panel (Bottom Sheet):** Slides up after tapping on any hexagon:
     *   **Free:** "Occupy territory" button (inputting how many soldiers the player will leave there, minimum 1; option to enter the name of a new territorial unit).
     *   **Own:** Name of the territory, switch to designate the hexagon as a Center 👑, composition of the current garrison, option to reinforce the garrison, option to withdraw soldiers back to reserves, and calculation of the Background Bonus (+100% per each neighbor).
+        *   **Remote reinforcement rules in UI:**
+            *   Sending warriors to a **Home Territory** hexagon is instant and free.
+            *   Sending warriors to an **Outpost Territory** hexagon must offer 2 options:
+                1) burn 1 Support unit and send full selected warriors,
+                2) send without Support burn and apply 40% transit losses.
     *   **Enemy:** Name of the owner, fog of war ("??? BS"), "Scout" button, and "ATTACK!" button (active only if you are physically standing in the hexagon).
 
 ### 3. SCREEN: Army Recruitment (Automatic BLE Radar)
