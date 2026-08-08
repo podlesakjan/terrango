@@ -1384,15 +1384,14 @@ export class GameService implements OnModuleInit {
     );
     if (uniqueIndexes.length > 0) {
       // Prefer Redis pub/sub when available for cross-instance distribution
-      if (this.redisService) {
-        try {
-          void this.redisService.publish(
-            'map_hexes_changed',
-            JSON.stringify({ hexIndexes: uniqueIndexes }),
-          );
-        } catch {
-          this.events.emit('map_hexes_changed', { hexIndexes: uniqueIndexes });
-        }
+      if (this.redisService?.isEnabled) {
+        void this.redisService
+          .publish('map_hexes_changed', JSON.stringify({ hexIndexes: uniqueIndexes }))
+          .then((published) => {
+            if (!published) {
+              this.events.emit('map_hexes_changed', { hexIndexes: uniqueIndexes });
+            }
+          });
       } else {
         this.events.emit('map_hexes_changed', { hexIndexes: uniqueIndexes });
       }
@@ -1404,16 +1403,15 @@ export class GameService implements OnModuleInit {
   }
 
   private emitUserEvent(userId: string, event: string, payload: unknown): void {
-    if (this.redisService) {
-      try {
-        void this.redisService.publish(
-          `user_event:${userId}`,
-          JSON.stringify({ event, payload, userId }),
-        );
-        return;
-      } catch {
-        // fallback to local event emitter
-      }
+    if (this.redisService?.isEnabled) {
+      void this.redisService
+        .publish(`user_event:${userId}`, JSON.stringify({ event, payload, userId }))
+        .then((published) => {
+          if (!published) {
+            this.events.emit('user_event', { event, payload, userId });
+          }
+        });
+      return;
     }
 
     this.events.emit('user_event', {

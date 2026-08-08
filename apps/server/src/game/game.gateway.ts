@@ -57,7 +57,7 @@ export class GameGateway
     );
 
     // If Redis is configured, subscribe to cross-instance channels
-    if (this.redisService) {
+    if (this.redisService?.isEnabled) {
       void this.redisService.pSubscribe('map_hexes_changed', (_channel, message) => {
         try {
           const parsed = JSON.parse(message) as { hexIndexes: string[] };
