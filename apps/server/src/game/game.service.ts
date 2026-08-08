@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  OnModuleInit,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -17,9 +18,9 @@ import {
   BluetoothScanRepository,
 } from '../database/repositories';
 import { PlayerArmyRepository } from '../database/repositories/player-army.repository';
+import { HexEntity, TerritoryEntity } from '../database/entities';
 
 import {
-  ATTACK_PREPARATION_MS,
   ArmyUpdatePayload,
   AuthenticatedPlayer,
   BattleLogEntry,
@@ -31,7 +32,6 @@ import {
   HOME_COLOR,
   HexDetailPayload,
   HexRecord,
-  IncomingAttackAlertPayload,
   LOCATION_TTL_MS,
   MapHexagonView,
   MAX_SPEED_KMH,
@@ -54,7 +54,7 @@ interface TerritoryHint {
 }
 
 @Injectable()
-export class GameService {
+export class GameService implements OnModuleInit {
   public readonly events = new EventEmitter();
 
   private readonly battleLogs = new Map<string, BattleLogEntry[]>();
@@ -74,14 +74,53 @@ export class GameService {
     private readonly territoryRepository: TerritoryRepository,
     private readonly battleLogRepository: BattleLogRepository,
     private readonly bluetoothScanRepository: BluetoothScanRepository,
+    private readonly playerArmyRepository: PlayerArmyRepository,
     private readonly redisService?: RedisService,
   ) {
     this.events.setMaxListeners(0);
   }
-  private playerArmyRepository!: PlayerArmyRepository;
+  async onModuleInit(): Promise<void> {
+    const [users, hexes, territories, armies, logs] = await Promise.all([
+      this.userRepository.findAll(),
+      this.hexRepository.findAll(),
+      this.territoryRepository.findAll(),
+      this.playerArmyRepository.findAll(),
+      this.battleLogRepository.findAll(),
+    ]);
 
-  setPlayerArmyRepository(repo: PlayerArmyRepository): void {
-    this.playerArmyRepository = repo;
+    for (const user of users) this.loadUserToMemory(user);
+    for (const hex of hexes) {
+      this.hexes.set(hex.h3Index, {
+        changedAt: hex.changedAt.toISOString(),
+        garrisonComposition: Array.isArray(hex.garrisonComposition) ? hex.garrisonComposition : [],
+        h3Index: hex.h3Index,
+        ownerId: hex.ownerId,
+        territoryId: hex.territoryId,
+      });
+    }
+    for (const territory of territories) {
+      this.territories.set(territory.id, {
+        centerH3Index: territory.centerH3Index,
+        createdAt: territory.createdAt.toISOString(),
+        hexIndexes: new Set(territory.hexIndexes),
+        id: territory.id, name: territory.name, ownerId: territory.ownerId,
+        representativeH3Index: territory.representativeH3Index,
+        type: territory.type, updatedAt: territory.updatedAt.toISOString(),
+      });
+    }
+    for (const army of armies) this.playerArmies.set(army.ownerId,
+      Array.isArray(army.reservesComposition) ? army.reservesComposition : []);
+    for (const log of logs) {
+      const entries = this.battleLogs.get(log.userId) ?? [];
+      entries.push({
+        id: log.id, h3Index: log.h3Index, result: log.result as BattleResult | ScoutStatus,
+        timestamp: log.timestamp.toISOString(), type: log.type,
+        ...(log.type === 'ATTACK'
+          ? { myDead: log.myDead ?? 0, mySurvivors: log.mySurvivors ?? 0 }
+          : { revealedBs: log.revealedBs ?? 0 }),
+      } as BattleLogEntry);
+      this.battleLogs.set(log.userId, entries);
+    }
   }
 
   async register(body: Record<string, unknown>) {
@@ -150,15 +189,13 @@ export class GameService {
   }
 
   async loadPlayerArmyToMemory(userId: string): Promise<void> {
-    if (this.playerArmyRepository) {
-      const playerArmy = await this.playerArmyRepository.findByOwner(userId);
-      if (playerArmy) {
-        const composition: SoldierBucket[] = Array.isArray(playerArmy.reservesComposition)
-          ? playerArmy.reservesComposition
-          : [];
-        this.playerArmies.set(userId, composition);
-        return;
-      }
+    const playerArmy = await this.playerArmyRepository.findByOwner(userId);
+    if (playerArmy) {
+      const composition: SoldierBucket[] = Array.isArray(playerArmy.reservesComposition)
+        ? playerArmy.reservesComposition
+        : [];
+      this.playerArmies.set(userId, composition);
+      return;
     }
     // Initialize empty army if not found
     this.playerArmies.set(userId, []);
@@ -222,7 +259,7 @@ export class GameService {
     return this.getMapSnapshot(userId, changedVisibleHexes);
   }
 
-  establishTerritory(userId: string, body: Record<string, unknown>) {
+  async establishTerritory(userId: string, body: Record<string, unknown>) {
     const player = this.getUserOrThrow(userId);
     const h3Index = this.requireH3Index(body.h3Index, 'h3Index');
     const name = this.requireTerritoryName(body.name);
@@ -255,6 +292,7 @@ export class GameService {
     this.emitMapChanged([h3Index]);
     this.emitHexDetailUpdate(userId, h3Index);
     this.emitTerritoryUpdate(userId);
+    await this.persistPlayerState(userId);
 
     return {
       status: 'success',
@@ -262,7 +300,7 @@ export class GameService {
     };
   }
 
-  occupyHex(userId: string, body: Record<string, unknown>) {
+  async occupyHex(userId: string, body: Record<string, unknown>) {
     const player = this.getUserOrThrow(userId);
     if (!this.getHomeTerritory(userId)) {
       throw new BadRequestException('Establish a home territory before occupying more hexagons.');
@@ -323,6 +361,7 @@ export class GameService {
     this.emitArmyUpdate(userId);
     this.emitHexDetailUpdate(userId, h3Index);
     this.emitTerritoryUpdate(userId);
+    await this.persistPlayerState(userId);
 
     return {
       createdNewTerritory: createsNewTerritory,
@@ -335,7 +374,7 @@ export class GameService {
     return this.buildHexDetailPayload(userId, this.requireH3Index(h3Index, 'h3Index'));
   }
 
-  changeCenter(
+  async changeCenter(
     userId: string,
     territoryId: string,
     body: Record<string, unknown>,
@@ -359,6 +398,7 @@ export class GameService {
     this.emitMapChanged([previousCenter, h3Index]);
     this.emitHexDetailUpdate(userId, h3Index);
     this.emitTerritoryUpdate(userId);
+    await this.persistPlayerState(userId);
 
     return { status: 'success' };
   }
@@ -408,7 +448,7 @@ export class GameService {
     };
   }
 
-  renameTerritory(
+  async renameTerritory(
     userId: string,
     territoryId: string,
     body: Record<string, unknown>,
@@ -418,6 +458,7 @@ export class GameService {
     territory.updatedAt = this.nowIso();
 
     this.emitTerritoryUpdate(userId);
+    await this.persistPlayerState(userId);
     return { status: 'success' };
   }
 
@@ -439,7 +480,7 @@ export class GameService {
     };
   }
 
-  changeNickname(userId: string, body: Record<string, unknown>) {
+  async changeNickname(userId: string, body: Record<string, unknown>) {
     const player = this.getUserOrThrow(userId);
     const nickname = this.requireNickname(body.nickname);
     this.ensureNicknameAvailable(nickname, userId);
@@ -449,6 +490,7 @@ export class GameService {
     this.nicknameOwners.set(this.normalizeNickname(nickname), userId);
 
     this.emitMapChanged(this.getOwnedHexes(userId).map((hex) => hex.h3Index));
+    await this.persistPlayerState(userId);
     return { status: 'success' };
   }
 
@@ -500,7 +542,7 @@ export class GameService {
     };
   }
 
-  recruitDevice(userId: string, body: Record<string, unknown>) {
+  async recruitDevice(userId: string, body: Record<string, unknown>) {
     const player = this.getUserOrThrow(userId);
     const bluetoothId = this.requireString(body.bluetoothId, 'bluetoothId');
     const calculatedSoldier = this.requireCalculatedSoldier(
@@ -508,7 +550,10 @@ export class GameService {
       'calculatedSoldier',
     );
 
-    if (player.scannedBluetoothIds.has(bluetoothId)) {
+    if (
+      player.scannedBluetoothIds.has(bluetoothId) ||
+      await this.bluetoothScanRepository.hasScanned(userId, bluetoothId)
+    ) {
       const skippedPayload: RecruitResultPayload = {
         bluetoothId,
         message: 'Device already scanned. Recruitment skipped.',
@@ -520,6 +565,7 @@ export class GameService {
 
     player.scannedBluetoothIds.add(bluetoothId);
     player.stats.scannedDevices += 1;
+    await this.bluetoothScanRepository.recordScan(userId, bluetoothId);
 
     // Find or create bucket in reserves and increment count/totalBs
     const bucket = this.getOrCreateReserveBucket(userId, {
@@ -538,11 +584,12 @@ export class GameService {
 
     this.emitUserEvent(userId, 'recruit_result', recruitPayload);
     this.emitArmyUpdate(userId);
+    await this.persistPlayerState(userId);
 
     return recruitPayload;
   }
 
-  modifyGarrison(userId: string, body: Record<string, unknown>) {
+  async modifyGarrison(userId: string, body: Record<string, unknown>) {
     const h3Index = this.requireH3Index(body.h3Index, 'h3Index');
     const action = this.requireEnum<GarrisonAction>(
       body.action,
@@ -579,11 +626,12 @@ export class GameService {
     this.emitMapChanged([h3Index]);
     this.emitArmyUpdate(userId);
     this.emitHexDetailUpdate(userId, h3Index);
+    await this.persistPlayerState(userId);
 
     return { status: 'success' };
   }
 
-  sendReinforcements(userId: string, body: Record<string, unknown>) {
+  async sendReinforcements(userId: string, body: Record<string, unknown>) {
     const targetH3Index = this.requireH3Index(body.targetH3Index, 'targetH3Index');
     const battle = this.getPendingBattleForHexOrThrow(targetH3Index);
     if (battle.defenderUserId !== userId) {
@@ -602,27 +650,48 @@ export class GameService {
     const toMove = this.requireReserveComposition(userId, composition, 'composition');
     const movedComposition: SoldierBucket[] = [];
     const lostComposition: SoldierBucket[] = [];
+    const burnedComposition: SoldierBucket[] = [];
     let burnedSupportCount = 0;
 
     if (territory.type === 'OUTPOST') {
       if (burnSupportCount && burnSupportCount > 0) {
-        // Burn support units from reserves and move rest
+        // The sacrifice must come from units not included in the transfer.
+        // Calculate it without mutating reserves so a failed payment leaves no
+        // partially applied state behind.
         let toBurn = burnSupportCount;
         const reserves = this.playerArmies.get(userId) ?? [];
 
         for (const bucket of reserves.filter((b) => b.type === 'SUPPORT')) {
-          const burned = Math.min(toBurn, bucket.count);
+          const selectedForTransfer = toMove.find(
+            (selected) =>
+              selected.type === bucket.type &&
+              selected.rarity === bucket.rarity &&
+              selected.skill === bucket.skill,
+          );
+          const remainingCount = bucket.count - (selectedForTransfer?.count ?? 0);
+          const remainingBs = bucket.totalBs - (selectedForTransfer?.totalBs ?? 0);
+          const burned = Math.min(toBurn, Math.max(0, remainingCount));
           if (burned > 0) {
+            const burnedBs = Math.min(
+              remainingBs,
+              Math.round((remainingBs * burned) / remainingCount),
+            );
+            burnedComposition.push({
+              type: bucket.type,
+              rarity: bucket.rarity,
+              skill: bucket.skill,
+              count: burned,
+              totalBs: burnedBs,
+            });
             burnedSupportCount += burned;
-            bucket.count -= burned;
-            bucket.totalBs = Math.max(0, bucket.totalBs - (burned * bucket.totalBs) / Math.max(1, bucket.count + burned));
-            if (bucket.count <= 0) {
-              const idx = reserves.indexOf(bucket);
-              if (idx >= 0) reserves.splice(idx, 1);
-            }
             toBurn -= burned;
           }
           if (toBurn <= 0) break;
+        }
+        if (toBurn > 0) {
+          throw new BadRequestException(
+            'Insufficient Support units available for the outpost transmission sacrifice.',
+          );
         }
         movedComposition.push(...toMove);
       } else {
@@ -663,6 +732,14 @@ export class GameService {
     }
 
     // Remove losses and moved from reserves
+    if (burnedComposition.length > 0) {
+      this.removeFromReserveComposition(
+        userId,
+        burnedComposition,
+        burnedSupportCount,
+        this.sumCompositionBs(burnedComposition),
+      );
+    }
     if (lostComposition.length > 0) {
       this.removeFromReserveComposition(userId, lostComposition,
         lostComposition.reduce((s, b) => s + b.count, 0),
@@ -682,6 +759,7 @@ export class GameService {
     this.emitMapChanged([targetH3Index]);
     this.emitArmyUpdate(userId);
     this.emitHexDetailUpdate(userId, targetH3Index);
+    await this.persistPlayerState(userId);
 
     return {
       burnedSupportCount,
@@ -691,7 +769,7 @@ export class GameService {
     };
   }
 
-  scoutHex(userId: string, body: Record<string, unknown>) {
+  async scoutHex(userId: string, body: Record<string, unknown>) {
     const targetH3Index = this.requireH3Index(body.targetH3Index, 'targetH3Index');
     const hex = this.ensureHexRecord(targetH3Index);
 
@@ -739,11 +817,12 @@ export class GameService {
 
     this.recordScoutLog(userId, targetH3Index, payload.status, payload.revealedBs);
     this.emitUserEvent(userId, 'scout_result', payload);
+    await this.persistPlayerState(userId);
 
     return payload;
   }
 
-  startAttack(userId: string, body: Record<string, unknown>) {
+  async startAttack(userId: string, body: Record<string, unknown>) {
     const targetH3Index = this.requireH3Index(body.targetH3Index, 'targetH3Index');
     const attackerComposition = this.requireCompositionArray(
       body.attackerComposition,
@@ -775,11 +854,6 @@ export class GameService {
 
     const battleId = randomUUID();
     const now = this.nowIso();
-    const resolveAt = new Date(Date.now() + ATTACK_PREPARATION_MS).toISOString();
-
-    const timeoutHandle = setTimeout(() => {
-      this.resolvePendingBattle(battleId);
-    }, ATTACK_PREPARATION_MS);
 
     const pendingBattle: PendingBattle = {
       attackerComposition: toAttack,
@@ -787,29 +861,19 @@ export class GameService {
       createdAt: now,
       defenderUserId: hex.ownerId,
       id: battleId,
-      resolveAt,
       targetH3Index,
-      timeoutHandle,
     };
 
     this.pendingBattles.set(battleId, pendingBattle);
     this.pendingBattleByHex.set(targetH3Index, battleId);
 
-    const territory = this.getTerritoryForHex(targetH3Index);
-    const attacker = this.getUserOrThrow(userId);
-    const alertPayload: IncomingAttackAlertPayload = {
-      attackerName: attacker.nickname,
-      defendingH3Index: targetH3Index,
-      territoryName: territory?.name ?? 'Unknown Territory',
-    };
-
-    this.emitArmyUpdate(userId);
-    this.emitUserEvent(hex.ownerId, 'incoming_attack_alert', alertPayload);
+    // Combat has no preparation window: resolve in the same action so the
+    // defender cannot reinforce after the attack has been initiated.
+    await this.resolvePendingBattle(battleId);
 
     return {
       battleId,
-      resolveAt,
-      status: 'PENDING',
+      status: 'RESOLVED',
     };
   }
 
@@ -1030,13 +1094,61 @@ export class GameService {
     }
   }
 
-  private resolvePendingBattle(battleId: string): void {
+  private async persistPlayerState(userId: string): Promise<void> {
+    const player = this.getUserOrThrow(userId);
+    const hexes = this.getOwnedHexes(userId).map((hex): HexEntity => ({
+      h3Index: hex.h3Index,
+      ownerId: hex.ownerId,
+      territoryId: hex.territoryId,
+      garrisonComposition: hex.garrisonComposition,
+      changedAt: new Date(hex.changedAt),
+      createdAt: new Date(hex.changedAt),
+    }));
+    const territories = this.getPlayerTerritories(userId).map((territory): TerritoryEntity => ({
+      id: territory.id,
+      ownerId: territory.ownerId,
+      name: territory.name,
+      type: territory.type,
+      centerH3Index: territory.centerH3Index,
+      hexIndexes: [...territory.hexIndexes],
+      representativeH3Index: territory.representativeH3Index,
+      createdAt: new Date(territory.createdAt),
+      updatedAt: new Date(territory.updatedAt),
+    }));
+    const logs = (this.battleLogs.get(userId) ?? []).map((log) => ({
+      id: log.id,
+      userId,
+      type: log.type,
+      h3Index: log.h3Index,
+      result: log.result,
+      myDead: log.type === 'ATTACK' ? log.myDead : null,
+      mySurvivors: log.type === 'ATTACK' ? log.mySurvivors : null,
+      revealedBs: log.type === 'SCOUT' ? log.revealedBs : null,
+      timestamp: new Date(log.timestamp),
+    }));
+
+    await Promise.all([
+      this.userRepository.update(userId, {
+        nickname: player.nickname,
+        homeCenterH3Index: player.homeCenterH3Index,
+        stats: player.stats,
+      }),
+      this.playerArmyRepository.upsertReserves(
+        userId,
+        this.playerArmies.get(userId) ?? [],
+      ),
+      ...hexes.map((hex) => this.hexRepository.save(hex)),
+      ...logs.map((log) => this.battleLogRepository.save(log)),
+    ]);
+    await this.territoryRepository.replaceForOwner(userId, territories);
+  }
+
+  private async resolvePendingBattle(battleId: string): Promise<void> {
     const battle = this.pendingBattles.get(battleId);
     if (!battle) {
       return;
     }
 
-    clearTimeout(battle.timeoutHandle);
     this.pendingBattles.delete(battleId);
     this.pendingBattleByHex.delete(battle.targetH3Index);
 
@@ -1171,6 +1283,10 @@ export class GameService {
     this.emitArmyUpdate(defender.id);
     this.emitHexDetailUpdate(attacker.id, battle.targetH3Index);
     this.emitHexDetailUpdate(defender.id, battle.targetH3Index);
+    await Promise.all([
+      this.persistPlayerState(attacker.id),
+      this.persistPlayerState(defender.id),
+    ]);
   }
 
   private projectSurvivorsComposition(
@@ -1742,7 +1858,10 @@ export class GameService {
       throw new BadRequestException(`${fieldName} must be an array of composition buckets.`);
     }
 
-    const composition: SoldierBucket[] = [];
+    // Canonicalize buckets before validating inventory. Without this, a caller
+    // could submit the same bucket multiple times and have each entry checked
+    // against the original balance independently.
+    const compositionByKey = new Map<string, SoldierBucket>();
     for (const item of value) {
       if (!item || typeof item !== 'object') {
         throw new BadRequestException(`${fieldName} contains invalid bucket.`);
@@ -1767,8 +1886,22 @@ export class GameService {
         throw new BadRequestException(`${fieldName}: Warrior units must not define a support skill.`);
       }
 
-      composition.push({ type, rarity, skill, count, totalBs });
+      const key = `${type}\u0000${rarity}\u0000${skill ?? ''}`;
+      const existing = compositionByKey.get(key);
+      if (existing) {
+        const mergedCount = existing.count + count;
+        const mergedTotalBs = existing.totalBs + totalBs;
+        if (!Number.isSafeInteger(mergedCount) || !Number.isSafeInteger(mergedTotalBs)) {
+          throw new BadRequestException(`${fieldName} contains values that are too large.`);
+        }
+        existing.count = mergedCount;
+        existing.totalBs = mergedTotalBs;
+      } else {
+        compositionByKey.set(key, { type, rarity, skill, count, totalBs });
+      }
     }
+
+    const composition = [...compositionByKey.values()];
 
     if (options?.minItems && composition.length < options.minItems) {
       throw new BadRequestException(

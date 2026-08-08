@@ -16,7 +16,8 @@ export class UserEntity {
   @Column('text', { nullable: true })
   email!: string;
 
-  @Column('uuid', { nullable: true })
+  // H3 indexes are hexadecimal strings, not UUIDs.
+  @Column('text', { nullable: true })
   homeCenterH3Index!: string | null;
 
   @Column('jsonb', { default: '{"hexesClaimed":0,"biggestBattleBs":0,"scannedDevices":0}' })
@@ -32,5 +33,4 @@ export class UserEntity {
   @Column('timestamp', { default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
   updatedAt!: Date;
 }
-
 

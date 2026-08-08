@@ -14,6 +14,14 @@ export class HexRepository {
     return this.repo.findOne({ where: { h3Index } });
   }
 
+  async findAll(): Promise<HexEntity[]> {
+    return this.repo.find();
+  }
+
+  async save(hex: HexEntity): Promise<void> {
+    await this.repo.save(hex);
+  }
+
   async findByH3Indexes(h3Indexes: string[]): Promise<HexEntity[]> {
     if (h3Indexes.length === 0) return [];
     return this.repo.find({ where: h3Indexes.map((h3Index) => ({ h3Index })) });
@@ -92,4 +100,3 @@ export class HexRepository {
     await this.update(h3Index, { garrisonComposition: list });
   }
 }
-

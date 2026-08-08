@@ -1,0 +1,6 @@
+{
+  "apiBaseUrl": "http://localhost:3000/api/v1",
+  "websocketUrl": "ws://localhost:3000",
+  "mapDefaultZoom": 14.0
+}
+

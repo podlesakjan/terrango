@@ -14,6 +14,10 @@ export class UserRepository {
     return this.repo.findOne({ where: { id } });
   }
 
+  async findAll(): Promise<UserEntity[]> {
+    return this.repo.find();
+  }
+
   async findByProviderId(providerId: string): Promise<UserEntity | null> {
     return this.repo.findOne({ where: { providerId } });
   }
@@ -55,4 +59,3 @@ export class UserRepository {
     await this.update(userId, { stats: updated } as any);
   }
 }
-

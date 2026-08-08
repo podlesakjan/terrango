@@ -14,6 +14,19 @@ export class TerritoryRepository {
     return this.repo.findOne({ where: { id } });
   }
 
+  async findAll(): Promise<TerritoryEntity[]> {
+    return this.repo.find();
+  }
+
+  async replaceForOwner(ownerId: string, territories: TerritoryEntity[]): Promise<void> {
+    await this.repo.manager.transaction(async (manager) => {
+      await manager.delete(TerritoryEntity, { ownerId });
+      if (territories.length > 0) {
+        await manager.save(TerritoryEntity, territories);
+      }
+    });
+  }
+
   async findByOwner(ownerId: string): Promise<TerritoryEntity[]> {
     return this.repo.find({ where: { ownerId }, order: { name: 'ASC' } });
   }
@@ -43,4 +56,3 @@ export class TerritoryRepository {
     await this.repo.delete(ids);
   }
 }
-

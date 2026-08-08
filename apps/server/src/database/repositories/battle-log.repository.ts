@@ -17,9 +17,16 @@ export class BattleLogRepository {
     });
   }
 
+  async findAll(): Promise<BattleLogEntity[]> {
+    return this.repo.find({ order: { timestamp: 'DESC' } });
+  }
+
   async create(log: Omit<BattleLogEntity, 'timestamp'>): Promise<BattleLogEntity> {
     const entity = this.repo.create(log);
     return this.repo.save(entity);
   }
-}
 
+  async save(log: BattleLogEntity): Promise<void> {
+    await this.repo.save(log);
+  }
+}

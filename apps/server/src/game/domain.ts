@@ -1,4 +1,3 @@
-export const ATTACK_PREPARATION_MS = 15_000;
 export const ENEMY_COLOR = '#E53935';
 export const H3_RESOLUTION = 9;
 export const HOME_COLOR = '#2196F3';
@@ -99,9 +98,7 @@ export interface PendingBattle {
   createdAt: string;
   defenderUserId: string;
   id: string;
-  resolveAt: string;
   targetH3Index: string;
-  timeoutHandle: NodeJS.Timeout;
 }
 
 export interface MapHexagonView {
@@ -149,12 +146,6 @@ export interface BattleResultPayload {
   myDeadCount: number;
   mySurvivors: SoldierBucket[];
   result: BattleResult;
-}
-
-export interface IncomingAttackAlertPayload {
-  attackerName: string;
-  defendingH3Index: string;
-  territoryName: string;
 }
 
 export interface HexGarrisonPayload {

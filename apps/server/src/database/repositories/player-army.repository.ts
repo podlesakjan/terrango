@@ -14,6 +14,10 @@ export class PlayerArmyRepository {
     return this.repo.findOne({ where: { ownerId } });
   }
 
+  async findAll(): Promise<PlayerArmyEntity[]> {
+    return this.repo.find();
+  }
+
   async create(army: Omit<PlayerArmyEntity, 'createdAt' | 'updatedAt'>): Promise<PlayerArmyEntity> {
     const entity = this.repo.create(army);
     return this.repo.save(entity);
@@ -43,4 +47,3 @@ function cryptoRandomUuid() {
     return v.toString(16);
   });
 }
-
