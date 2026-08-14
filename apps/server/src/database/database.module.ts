@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule, type TypeOrmModuleOptions } from '@nestjs/typeorm';
 import {
@@ -40,6 +41,10 @@ function createTypeOrmOptions(): TypeOrmModuleOptions {
     entities: [...ENTITIES],
     synchronize: !isProduction,
     logging: process.env.NODE_ENV === 'development',
+    ...(isProduction && {
+      migrations: [path.join(__dirname, 'migrations', '*.js')],
+      migrationsRun: true,
+    }),
   };
 
   if (databaseUrl) {
