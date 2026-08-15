@@ -1,30 +1,18 @@
-# Upgrade Versions and Fix NDK Build Failure
+# Fix afterEvaluate Regression and Re-apply minSdk Change
 
-This plan re-applies the Gradle, AGP, and Kotlin upgrades as you've confirmed you have an internet connection. It also fixes the `[CXX1110]` NDK platform version error.
-
-## User Review Required
-
-> [!IMPORTANT]
-> Since your `flutter build apk` encountered a `java.net.UnknownHostException: services.gradle.org`, please ensure that your terminal or Android Studio has permission to access the internet and that there are no proxy or DNS issues preventing Gradle from downloading the new distributions.
+This plan fixes the recurring `afterEvaluate` error by applying the lifecycle check to the CMake configuration logic and ensures the `minSdk` is correctly set to 21.
 
 ## Proposed Changes
 
 ### Android Build Configuration
 
-#### [MODIFY] [gradle-wrapper.properties](file:///home/jan/AndroidStudioProjects/Terrango/apps/mobile/android/gradle/wrapper/gradle-wrapper.properties)
-- Upgrade `distributionUrl` to use Gradle 8.14.0.
-
-#### [MODIFY] [settings.gradle.kts](file:///home/jan/AndroidStudioProjects/Terrango/apps/mobile/android/settings.gradle.kts)
-- Upgrade `com.android.application` to version `8.11.1`.
-- Upgrade `org.jetbrains.kotlin.android` to version `2.2.20`.
-
-#### [MODIFY] [gradle.properties](file:///home/jan/AndroidStudioProjects/Terrango/apps/mobile/android/gradle.properties)
-- Add `android.ndk.suppressMinSdkVersionError=21` to suppress the NDK platform version error.
+#### [MODIFY] [build.gradle.kts](file:///home/jan/AndroidStudioProjects/Terrango/apps/mobile/android/build.gradle.kts)
+- Wrap the CMake version configuration in a lifecycle-aware block, similar to the namespace fix. This prevents the `Cannot run Project.afterEvaluate(Action) when the project is already evaluated` error.
 
 #### [MODIFY] [app/build.gradle.kts](file:///home/jan/AndroidStudioProjects/Terrango/apps/mobile/android/app/build.gradle.kts)
-- Ensure `minSdk` is at least 21 to satisfy modern NDK requirements (e.g., from `h3_flutter`).
+- Re-apply `minSdk = 21` to satisfy the requirements of native plugins like `h3_flutter`.
 
 ## Verification Plan
 
 ### Manual Verification
-- Run `flutter build apk`. The upgrades should download, the `afterEvaluate` error should not occur, and the NDK `minSdk` error should be resolved.
+- Run `flutter build apk`. The build should no longer fail with the `afterEvaluate` exception and should successfully compile native components using CMake 3.22.1.

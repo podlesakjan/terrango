@@ -14,15 +14,23 @@ val newBuildDir: Directory =
 rootProject.layout.buildDirectory.value(newBuildDir)
 
 subprojects {
+    // Set build directory
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
-}
-subprojects {
-    project.evaluationDependsOn(":app")
-}
 
-subprojects {
-    val fixNamespace = Action<Project> {
+    // Namespace and CMake Fixes
+    val fixCmakeAndNamespace = Action<Project> {
+        val android = extensions.findByName("android")
+        if (android != null) {
+            try {
+                val externalNativeBuild = android.javaClass.getMethod("getExternalNativeBuild").invoke(android)
+                val cmake = externalNativeBuild.javaClass.getMethod("getCmake").invoke(externalNativeBuild)
+                cmake.javaClass.getMethod("setVersion", String::class.java).invoke(cmake, "3.22.1")
+            } catch (e: Exception) {
+                // Ignore if the methods don't exist (not a native project)
+            }
+        }
+
         val androidExt = extensions.findByName("android") ?: return@Action
 
         val getNamespace = androidExt.javaClass.methods.find {
@@ -47,11 +55,15 @@ subprojects {
         setNamespace.invoke(androidExt, packageName)
     }
 
-    if (state.executed) {
-        fixNamespace.execute(this)
+    if (project.state.executed) {
+        fixCmakeAndNamespace.execute(project)
     } else {
-        afterEvaluate(fixNamespace)
+        project.afterEvaluate(fixCmakeAndNamespace)
     }
+}
+
+subprojects {
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register<Delete>("clean") {

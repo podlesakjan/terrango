@@ -1,5 +1,3 @@
-- `[x]` Upgrade Gradle version in `gradle-wrapper.properties`
-- `[x]` Upgrade AGP and Kotlin versions in `settings.gradle.kts`
-- `[x]` Add suppression flag to `gradle.properties`
-- `[x]` Set `minSdk = 21` in `app/build.gradle.kts`
-- `[x]` Verify build with `flutter build apk`
+- `[ ]` Fix `afterEvaluate` error in `android/build.gradle.kts` by making CMake config lifecycle-aware
+- `[ ]` Re-apply `minSdk = 21` in `android/app/build.gradle.kts`
+- `[ ]` Verify build with `flutter build apk`
