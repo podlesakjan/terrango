@@ -1,0 +1,5 @@
+- `[x]` Upgrade Gradle version in `gradle-wrapper.properties`
+- `[x]` Upgrade AGP and Kotlin versions in `settings.gradle.kts`
+- `[x]` Add suppression flag to `gradle.properties`
+- `[x]` Set `minSdk = 21` in `app/build.gradle.kts`
+- `[x]` Verify build with `flutter build apk`
