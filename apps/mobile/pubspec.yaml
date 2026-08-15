@@ -34,8 +34,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: ^2.6.1
   go_router: ^14.8.1
-  flutter_map: ^7.0.2
-  latlong2: ^0.9.1
+  mapbox_maps_flutter: ^2.26.0
   h3_flutter: ^0.6.3
   web_socket_channel: ^3.0.3
   flutter_blue_plus: ^1.35.5
@@ -44,6 +43,7 @@ dependencies:
   wakelock_plus: ^1.2.8
   flutter_background_service: ^5.1.0
   google_mobile_ads: ^5.2.0
+  flutter_dotenv: ^5.2.1
 
 dev_dependencies:
   flutter_test:
@@ -64,3 +64,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/config/
+    - .env

@@ -24,8 +24,14 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Terrango potrebuje GPS polohu pro urceni aktualniho hexu a akce na mape.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Terrango pouziva polohu i pri aktivnim hrani pro validaci pritomnosti v hexu.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

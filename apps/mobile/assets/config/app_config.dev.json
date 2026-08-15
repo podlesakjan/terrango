@@ -1,6 +1,10 @@
 {
-  "apiBaseUrl": "http://localhost:3000/api/v1",
-  "websocketUrl": "ws://localhost:3000",
-  "mapDefaultZoom": 14.0
+  "apiBaseUrl": "https://terrango.onrender.com/api/v1",
+  "websocketUrl": "wss://terrango.onrender.com",
+  "mapDefaultZoom": 14.0,
+  "mapboxAccessToken": "",
+  "mapDarkStyleUri": "mapbox://styles/mapbox/dark-v11",
+  "admobBannerAndroidUnitId": "ca-app-pub-3940256099942544/6300978111",
+  "admobBannerIosUnitId": "ca-app-pub-3940256099942544/2934735716",
+  "apiBearerToken": ""
 }
-
