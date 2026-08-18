@@ -127,7 +127,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _sendLocationUpdate(position, h3Index);
     _refreshHexSource();
     _updateGpsPuck();
-    _setInitialCameraIfPossible();
+    //_setInitialCameraIfPossible();
   }
 
   void _ensureLocationHeartbeat() {
@@ -239,7 +239,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   styleUri: config.mapDarkStyleUri,
                   viewport: CameraViewportState(
                     zoom: config.mapDefaultZoom,
-                    center: _initialCenterFromState(hexes),
+                    center: widget.focusH3Index != null && widget.focusH3Index!.isNotEmpty
+                        ? _initialCenterFromState(hexes)
+                        : Point(coordinates: Position(14.4378, 50.0755)),
                   ),
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
@@ -269,7 +271,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     await _ensureGameLayers();
                     _refreshHexSource();
                     _updateGpsPuck();
-                    _setInitialCameraIfPossible();
+
+                    if (!_cameraInitialized) {
+                      await _setInitialCameraIfPossible();
+                    }
+
                     _scheduleViewportSync();
                   },
                   onCameraChangeListener: (_) {

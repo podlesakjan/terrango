@@ -41,14 +41,14 @@ class AppConfig {
       baseUrl = baseUrl.substring(0, baseUrl.length - 1);
     }
 
-    if (baseUrl.endsWith('/api/v1')) {
-      return baseUrl;
+    if (!baseUrl.endsWith('/api/v1')) {
+      if (baseUrl.endsWith('/api')) {
+        baseUrl = '$baseUrl/v1';
+      } else {
+        baseUrl = '$baseUrl/api/v1';
+      }
     }
 
-    if (baseUrl.endsWith('/api')) {
-      return '$baseUrl/v1';
-    }
-
-    return '$baseUrl/api/v1';
+    return '$baseUrl/';
   }
 }
