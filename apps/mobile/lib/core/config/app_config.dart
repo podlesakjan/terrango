@@ -7,6 +7,7 @@ class AppConfig {
     required this.mapDefaultZoom,
     required this.mapboxAccessToken,
     required this.mapDarkStyleUri,
+    required this.mapOutdoorStyleUri,
     required this.admobBannerAndroidUnitId,
     required this.admobBannerIosUnitId,
     required this.apiBearerToken,
@@ -17,6 +18,7 @@ class AppConfig {
   final double mapDefaultZoom;
   final String mapboxAccessToken;
   final String mapDarkStyleUri;
+  final String mapOutdoorStyleUri;
   final String admobBannerAndroidUnitId;
   final String admobBannerIosUnitId;
   final String apiBearerToken;
@@ -29,6 +31,7 @@ class AppConfig {
       mapDefaultZoom: double.tryParse(dotenv.env['MAP_DEFAULT_ZOOM'] ?? '14.0') ?? 14.0,
       mapboxAccessToken: dotenv.env['MAPBOX_ACCESS_TOKEN'] ?? '',
       mapDarkStyleUri: dotenv.env['MAPBOX_DARK_STYLE_URI'] ?? 'mapbox://styles/mapbox/dark-v11',
+      mapOutdoorStyleUri: dotenv.env['MAPBOX_OUTDOOR_STYLE_URI'] ?? 'mapbox://styles/mapbox/outdoors-v12',
       admobBannerAndroidUnitId: dotenv.env['ADMOB_BANNER_ANDROID_UNIT_ID'] ?? 'ca-app-pub-3940256099942544/6300978111',
       admobBannerIosUnitId: dotenv.env['ADMOB_BANNER_IOS_UNIT_ID'] ?? 'ca-app-pub-3940256099942544/2934735716',
       apiBearerToken: dotenv.env['API_BEARER_TOKEN'] ?? '',

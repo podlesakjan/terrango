@@ -236,7 +236,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               data: (hexes) {
                 return MapWidget(
                   key: const ValueKey('terrango_mapbox'),
-                  styleUri: config.mapDarkStyleUri,
+                  styleUri: config.mapOutdoorStyleUri,
                   viewport: CameraViewportState(
                     zoom: config.mapDefaultZoom,
                     center: widget.focusH3Index != null && widget.focusH3Index!.isNotEmpty
