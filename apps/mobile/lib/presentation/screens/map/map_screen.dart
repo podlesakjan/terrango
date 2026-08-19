@@ -257,9 +257,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             gestureContext.point.coordinates.lat.toDouble(),
                             gestureContext.point.coordinates.lng.toDouble(),
                           );
-                          final tappedHex = _findHexByH3Index(hexes, tappedH3);
+                          final currentHexes = ref.read(visibleHexesProvider).value ?? const <HexTile>[];
+                          final tappedHex = _findHexByH3Index(currentHexes, tappedH3);
                           if (tappedHex != null && mounted) {
-                            _openHexContextSheet(context, tappedHex, hexes);
+                            _openHexContextSheet(context, tappedHex, currentHexes);
                           }
                         }),
                         interactionID: 'hex-map-tap',
