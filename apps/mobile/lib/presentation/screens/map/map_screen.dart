@@ -234,6 +234,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     });
 
     return Scaffold(
+      floatingActionButton: FloatingActionButton(
+        onPressed: _centerMapOnUser,
+        child: const Icon(Icons.my_location),
+      ),
       body: Stack(
         children: [
           Positioned.fill(
@@ -955,6 +959,24 @@ class _MapScreenState extends ConsumerState<MapScreen>
     } catch (_) {
       // It's fine to ignore, not critical.
     }
+  }
+
+  void _centerMapOnUser() {
+    final position = _currentPosition;
+    final map = _mapboxMap;
+    if (position == null || map == null) {
+      _showInfo('Current location not available.');
+      return;
+    }
+
+    map.setCamera(
+      CameraOptions(
+        center: Point(
+          coordinates: Position(position.longitude, position.latitude),
+        ),
+        zoom: ref.read(appConfigProvider).mapDefaultZoom,
+      ),
+    );
   }
 }
 
