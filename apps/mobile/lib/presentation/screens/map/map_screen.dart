@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'dart:isolate';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:flutter/material.dart';
@@ -494,8 +496,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     final source = await map.style.getSource(_hexSourceId);
     if (source is GeoJsonSource) {
-      final geoJson = await Isolate.run(() => jsonEncode(
-          _buildHexFeatureCollection(hexes, _currentH3Index, _h3)));
+      final h3 = _h3;
+      final currentH3Index = _currentH3Index;
+      final geoJson = await Isolate.run(
+        () => jsonEncode(
+            _buildHexFeatureCollection(hexes, currentH3Index, h3)),
+      );
       await source.updateGeoJSON(geoJson);
     }
   }
