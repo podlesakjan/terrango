@@ -24,12 +24,9 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
   StreamSubscription<List<ScanResult>>? _scanResultsSub;
   StreamSubscription<BluetoothAdapterState>? _adapterStateSub;
   StreamSubscription<Map<String, dynamic>>? _socketEventsSub;
-  Timer? _ticker;
   late final AnimationController _radarController;
 
   bool _isScanning = false;
-  int _reserveCount = 0;
-  int _reserveBs = 0;
   int _sessionRecruitedCount = 0;
   int _sessionRecruitedBs = 0;
 
@@ -41,7 +38,6 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
       duration: const Duration(seconds: 4),
     )..repeat();
     _bindSocket();
-    _startUiTicker();
     _setupBluetoothAndScan();
   }
 
@@ -50,7 +46,6 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     _scanResultsSub?.cancel();
     _socketEventsSub?.cancel();
     _adapterStateSub?.cancel();
-    _ticker?.cancel();
     _radarController.dispose();
     unawaited(FlutterBluePlus.stopScan());
     super.dispose();
@@ -69,43 +64,39 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
         final bluetoothId = (payload['bluetoothId'] as String?)?.trim() ?? 'UNKNOWN';
         final recruitedSoldier = _pendingRecruitments.remove(bluetoothId);
 
-        if (status == 'SUCCESS' && recruitedSoldier != null && mounted) {
+        if (mounted) {
           setState(() {
-            _sessionRecruitedCount += 1;
-            _sessionRecruitedBs += (recruitedSoldier['bs'] as num?)?.toInt() ?? 0;
+            if (status == 'SUCCESS' && recruitedSoldier != null) {
+              _sessionRecruitedCount += 1;
+              _sessionRecruitedBs += (recruitedSoldier['bs'] as num?)?.toInt() ?? 0;
+            }
+            _addFeedEntryWithoutSetState(
+              message: message?.isNotEmpty == true
+                  ? message!
+                  : _fallbackRecruitMessage(
+                      status: status,
+                      bluetoothId: bluetoothId,
+                      recruitedSoldier: recruitedSoldier,
+                    ),
+              isError: status == 'SKIPPED',
+            );
           });
         }
-
-        _addFeedEntry(
-          message: message?.isNotEmpty == true
-              ? message!
-              : _fallbackRecruitMessage(
-                  status: status,
-                  bluetoothId: bluetoothId,
-                  recruitedSoldier: recruitedSoldier,
-                ),
-          isError: status == 'SKIPPED',
-        );
         return;
       }
 
       if (event == 'army_update' && payload is Map<String, dynamic>) {
-        final reserveCount = (payload['reserveCount'] as num?)?.toInt() ?? _reserveCount;
-        final reserveBs = (payload['reserveBs'] as num?)?.toInt() ?? _reserveBs;
-        if (!mounted) {
-          return;
+        if (mounted) {
+          ref.invalidate(armyOverviewProvider);
         }
-        setState(() {
-          _reserveCount = reserveCount;
-          _reserveBs = reserveBs;
-        });
       }
     });
   }
 
   Future<void> _setupBluetoothAndScan() async {
     if (await FlutterBluePlus.isSupported == false) {
-      _addFeedEntry(message: 'Bluetooth not supported on this device.', isError: true);
+      setState(() =>
+          _addFeedEntryWithoutSetState(message: 'Bluetooth not supported on this device.', isError: true));
       return;
     }
 
@@ -116,10 +107,10 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
         } else {
           _stopScan(showMessage: false);
           if (state == BluetoothAdapterState.off) {
-            _addFeedEntry(
-              message: 'Bluetooth is off. Please turn it on for recruitment to work.',
-              isError: true,
-            );
+            setState(() => _addFeedEntryWithoutSetState(
+                  message: 'Bluetooth is off. Please turn it on for recruitment to work.',
+                  isError: true,
+                ));
           }
         }
       }
@@ -152,10 +143,12 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
       }
       setState(() {
         _isScanning = true;
+        _addFeedEntryWithoutSetState(
+            message: 'Scanner started. Waiting for nearby Bluetooth IDs.', isError: false);
       });
-      _addFeedEntry(message: 'Scanner started. Waiting for nearby Bluetooth IDs.', isError: false);
     } catch (error) {
-      _addFeedEntry(message: 'Failed to start scanner: $error', isError: true);
+      setState(
+          () => _addFeedEntryWithoutSetState(message: 'Failed to start scanner: $error', isError: true));
     }
   }
 
@@ -173,7 +166,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
       _isScanning = false;
     });
     if (wasScanning && showMessage) {
-      _addFeedEntry(message: 'Scanner stopped.', isError: false);
+      setState(() => _addFeedEntryWithoutSetState(message: 'Scanner stopped.', isError: false));
     }
   }
 
@@ -183,34 +176,46 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     }
 
     final controller = ref.read(gameSocketEventControllerProvider);
-    setState(() {
-      for (final result in results) {
-        final bluetoothId = result.device.remoteId.str.trim();
-        if (bluetoothId.isEmpty || _seenBluetoothIds.contains(bluetoothId)) {
-          continue;
-        }
+    var changed = false;
+    final newEntries = <_RecruitFeedEntry>[];
 
-        _seenBluetoothIds.add(bluetoothId);
-        final calculatedSoldier = _calculateSoldier(
-          bluetoothId: bluetoothId,
-          rssi: result.rssi,
-        );
-        _pendingRecruitments[bluetoothId] = calculatedSoldier;
+    for (final result in results) {
+      final bluetoothId = result.device.remoteId.str.trim();
+      if (bluetoothId.isEmpty || _seenBluetoothIds.contains(bluetoothId)) {
+        continue;
+      }
+      changed = true;
 
-        controller.sendRecruitDevice(
+      _seenBluetoothIds.add(bluetoothId);
+      final calculatedSoldier = _calculateSoldier(
+        bluetoothId: bluetoothId,
+        rssi: result.rssi,
+      );
+      _pendingRecruitments[bluetoothId] = calculatedSoldier;
+
+      controller.sendRecruitDevice(
+        bluetoothId: bluetoothId,
+        calculatedSoldier: calculatedSoldier,
+      );
+
+      newEntries.add(_RecruitFeedEntry(
+        createdAt: DateTime.now().toUtc(),
+        message: _detectedRecruitMessage(
           bluetoothId: bluetoothId,
           calculatedSoldier: calculatedSoldier,
-        );
+        ),
+        isError: false,
+      ));
+    }
 
-        _addFeedEntry(
-          message: _detectedRecruitMessage(
-            bluetoothId: bluetoothId,
-            calculatedSoldier: calculatedSoldier,
-          ),
-          isError: false,
-        );
-      }
-    });
+    if (changed) {
+      setState(() {
+        _feed.insertAll(0, newEntries);
+        if (_feed.length > 150) {
+          _feed.removeRange(150, _feed.length);
+        }
+      });
+    }
   }
 
   Map<String, dynamic> _calculateSoldier({
@@ -310,23 +315,21 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     return 'Warrior, $rarityLabel';
   }
 
-  void _addFeedEntry({required String message, required bool isError}) {
+  void _addFeedEntryWithoutSetState({required String message, required bool isError}) {
     if (!mounted) {
       return;
     }
-    setState(() {
-      _feed.insert(
-        0,
-        _RecruitFeedEntry(
-          createdAt: DateTime.now().toUtc(),
-          message: message,
-          isError: isError,
-        ),
-      );
-      if (_feed.length > 150) {
-        _feed.removeRange(150, _feed.length);
-      }
-    });
+    _feed.insert(
+      0,
+      _RecruitFeedEntry(
+        createdAt: DateTime.now().toUtc(),
+        message: message,
+        isError: isError,
+      ),
+    );
+    if (_feed.length > 150) {
+      _feed.removeRange(150, _feed.length);
+    }
   }
 
   String _timeAgo(DateTime createdAt) {
@@ -345,8 +348,8 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
   @override
   Widget build(BuildContext context) {
     final armyOverview = ref.watch(armyOverviewProvider).valueOrNull;
-    final reserveCount = armyOverview?.reserveCount ?? _reserveCount;
-    final reserveBs = armyOverview?.reserveBs ?? _reserveBs;
+    final reserveCount = armyOverview?.reserveCount ?? 0;
+    final reserveBs = armyOverview?.reserveBs ?? 0;
     final radarSize = MediaQuery.of(context).size.width / 3;
 
     return Scaffold(
