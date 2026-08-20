@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart' as geolocator;
@@ -31,6 +33,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _hexSourceId = 'hex_source';
   static const _hexFillLayerId = 'hex_fill_layer';
   static const _hexLineLayerId = 'hex_line_layer';
+  static const _hexTapInteractionId = 'hex-map-tap';
 
   final H3 _h3 = const H3Factory().load();
   final _cameraStorage = MapCameraStorage();
@@ -87,6 +90,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _viewportSyncDebounce?.cancel();
     _locationHeartbeatTimer?.cancel();
     ref.read(gameSocketEventControllerProvider).disconnect();
+    _mapboxMap?.removeInteraction(_hexTapInteractionId);
     _bannerAd?.dispose();
     super.dispose();
   }
@@ -200,18 +204,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final armyOverviewAsync = ref.watch(armyOverviewProvider);
     final wakeLockEnabled = ref.watch(wakeLockEnabledProvider);
     final backgroundTrackingEnabled = ref.watch(backgroundTrackingEnabledProvider);
-    ref.watch(sessionSyncProvider);
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      unawaited(
-        _applyRuntimePreferences(
-          wakeLockEnabled: wakeLockEnabled,
-          backgroundTrackingEnabled: backgroundTrackingEnabled,
-        ),
-      );
+    ref.listen<bool>(wakeLockEnabledProvider, (_, next) {
+      unawaited(_applyWakeLock(next));
+    });
+
+    ref.listen<bool>(backgroundTrackingEnabledProvider, (_, next) {
+      unawaited(_applyBackgroundTracking(next));
     });
 
     ref.listen<SessionSyncState>(sessionSyncProvider, (previous, next) {
@@ -261,7 +260,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             _openHexContextSheet(context, tappedHex, currentHexes);
                           }
                         }),
-                        interactionID: 'hex-map-tap',
+                        interactionID: _hexTapInteractionId,
                       );
                     }
                   },
@@ -345,10 +344,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 Container(
                   width: double.infinity,
                   height: 50,
-                  decoration: BoxDecoration(
-                    color: const Color(0x221D2633),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0x332196F3)),
+                  decoration: const BoxDecoration(
+                    color: Color(0x221D2633),
+                    borderRadius: BorderRadius.all(Radius.circular(12)),
+                    border: Border.fromBorderSide(BorderSide(color: Color(0x332196F3))),
                   ),
                   alignment: Alignment.center,
                   child: Text(
@@ -363,10 +362,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  Future<void> _applyRuntimePreferences({
-    required bool wakeLockEnabled,
-    required bool backgroundTrackingEnabled,
-  }) async {
+  Future<void> _applyWakeLock(bool wakeLockEnabled) async {
     if (_appliedWakeLockEnabled != wakeLockEnabled) {
       _appliedWakeLockEnabled = wakeLockEnabled;
       try {
@@ -375,7 +371,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // Ignore unsupported-platform/plugin errors outside mobile runtimes.
       }
     }
+  }
 
+  Future<void> _applyBackgroundTracking(bool backgroundTrackingEnabled) async {
     if (_appliedBackgroundTrackingEnabled != backgroundTrackingEnabled) {
       _appliedBackgroundTrackingEnabled = backgroundTrackingEnabled;
       try {
@@ -434,7 +432,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     await map.style.addSource(
       GeoJsonSource(
         id: _hexSourceId,
-        data: jsonEncode(_buildHexFeatureCollection(ref.read(visibleHexesProvider).value ?? const [])),
+        data: jsonEncode(_buildHexFeatureCollection(
+            ref.read(visibleHexesProvider).value ?? const [],
+            _currentH3Index,
+            _h3)),
       ),
     );
 
@@ -493,16 +494,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     final source = await map.style.getSource(_hexSourceId);
     if (source is GeoJsonSource) {
-      await source.updateGeoJSON(jsonEncode(_buildHexFeatureCollection(hexes)));
+      final geoJson = await Isolate.run(() => jsonEncode(
+          _buildHexFeatureCollection(hexes, _currentH3Index, _h3)));
+      await source.updateGeoJSON(geoJson);
     }
   }
 
-  Map<String, dynamic> _buildHexFeatureCollection(List<HexTile> hexes) {
+  static Map<String, dynamic> _buildHexFeatureCollection(
+      List<HexTile> hexes, String? currentH3Index, H3 h3) {
     final features = <Map<String, dynamic>>[];
 
     for (final hex in hexes) {
-      final h3Index = _parseH3(hex.h3Index);
-      final boundary = _h3.h3ToGeoBoundary(h3Index);
+      final h3Index = BigInt.parse(hex.h3Index, radix: 16);
+      final boundary = h3.h3ToGeoBoundary(h3Index);
       if (boundary.isEmpty) {
         continue;
       }
@@ -524,7 +528,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           'ownerName': hex.ownerName,
           'hasGarrison': hex.hasGarrison,
           'isCenter': hex.isCenter,
-          'isCurrent': hex.h3Index == _currentH3Index,
+          'isCurrent': hex.h3Index == currentH3Index,
         },
         'geometry': {
           'type': 'Polygon',
@@ -1010,9 +1014,7 @@ class _QuickActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return OutlinedButton(onPressed: onPressed, child: Text(label));
   }
-}
-
-typedef _EstablishTerritoryCallback = Future<void> Function(String territoryName);
+}typedef _EstablishTerritoryCallback = Future<void> Function(String territoryName);
 typedef _OccupyHexCallback = Future<void> Function(
   List<Map<String, dynamic>> composition,
   String? territoryName,
