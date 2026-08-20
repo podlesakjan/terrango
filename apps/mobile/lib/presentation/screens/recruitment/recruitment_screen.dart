@@ -178,37 +178,39 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
   }
 
   void _onScanResults(List<ScanResult> results) {
-    if (results.isEmpty) {
+    if (results.isEmpty || !mounted) {
       return;
     }
 
     final controller = ref.read(gameSocketEventControllerProvider);
-    for (final result in results) {
-      final bluetoothId = result.device.remoteId.str.trim();
-      if (bluetoothId.isEmpty || _seenBluetoothIds.contains(bluetoothId)) {
-        continue;
-      }
+    setState(() {
+      for (final result in results) {
+        final bluetoothId = result.device.remoteId.str.trim();
+        if (bluetoothId.isEmpty || _seenBluetoothIds.contains(bluetoothId)) {
+          continue;
+        }
 
-      _seenBluetoothIds.add(bluetoothId);
-      final calculatedSoldier = _calculateSoldier(
-        bluetoothId: bluetoothId,
-        rssi: result.rssi,
-      );
-      _pendingRecruitments[bluetoothId] = calculatedSoldier;
+        _seenBluetoothIds.add(bluetoothId);
+        final calculatedSoldier = _calculateSoldier(
+          bluetoothId: bluetoothId,
+          rssi: result.rssi,
+        );
+        _pendingRecruitments[bluetoothId] = calculatedSoldier;
 
-      controller.sendRecruitDevice(
-        bluetoothId: bluetoothId,
-        calculatedSoldier: calculatedSoldier,
-      );
-
-      _addFeedEntry(
-        message: _detectedRecruitMessage(
+        controller.sendRecruitDevice(
           bluetoothId: bluetoothId,
           calculatedSoldier: calculatedSoldier,
-        ),
-        isError: false,
-      );
-    }
+        );
+
+        _addFeedEntry(
+          message: _detectedRecruitMessage(
+            bluetoothId: bluetoothId,
+            calculatedSoldier: calculatedSoldier,
+          ),
+          isError: false,
+        );
+      }
+    });
   }
 
   Map<String, dynamic> _calculateSoldier({
