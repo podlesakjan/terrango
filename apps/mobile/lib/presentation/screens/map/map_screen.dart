@@ -15,6 +15,7 @@ import '../../../core/routing/app_router.dart';
 import '../../../domain/entities/army_overview.dart';
 import '../../../domain/entities/hex_tile.dart';
 import '../../providers/app_providers.dart';
+import 'map_camera_storage.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key, this.focusH3Index});
@@ -32,6 +33,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _hexLineLayerId = 'hex_line_layer';
 
   final H3 _h3 = const H3Factory().load();
+  final _cameraStorage = MapCameraStorage();
 
   MapboxMap? _mapboxMap;
   StreamSubscription<geolocator.Position>? _positionSubscription;
@@ -71,6 +73,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.inactive) {
+      unawaited(_saveCameraPosition());
       _locationHeartbeatTimer?.cancel();
       _locationHeartbeatTimer = null;
     }
@@ -78,6 +81,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   @override
   void dispose() {
+    unawaited(_saveCameraPosition());
     WidgetsBinding.instance.removeObserver(this);
     _positionSubscription?.cancel();
     _viewportSyncDebounce?.cancel();
@@ -560,6 +564,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
+    final storedCamera = await _cameraStorage.load();
+    if (storedCamera != null && (widget.focusH3Index == null || widget.focusH3Index!.isEmpty)) {
+      _cameraInitialized = true;
+      await map.setCamera(storedCamera);
+      _scheduleViewportSync();
+      return;
+    }
+
     final focusedH3Index = widget.focusH3Index?.trim();
     if (focusedH3Index != null && focusedH3Index.isNotEmpty) {
       final center = _h3.h3ToGeo(_parseH3(focusedH3Index));
@@ -913,6 +925,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final survivors = payload['mySurvivors'];
     final survivorCount = survivors is List ? survivors.length : 0;
     return 'Battle $result${targetH3Index != null ? ' on $targetH3Index' : ''}: $dead dead, $survivorCount survivors.';
+  }
+
+  Future<void> _saveCameraPosition() async {
+    final map = _mapboxMap;
+    if (map == null) {
+      return;
+    }
+    try {
+      final cameraState = await map.getCameraState();
+      await _cameraStorage.save(cameraState);
+    } catch (_) {
+      // It's fine to ignore, not critical.
+    }
   }
 }
 
