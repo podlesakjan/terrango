@@ -610,10 +610,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _scheduleViewportSync();
   }
 
-  void _scheduleViewportSync() {
+  void _scheduleViewportSync({bool force = false}) {
     _viewportSyncDebounce?.cancel();
     _viewportSyncDebounce = Timer(const Duration(milliseconds: 350), () {
-      unawaited(_syncVisibleHexesFromViewport());
+      unawaited(_syncVisibleHexesFromViewport(forceSnapshot: force));
     });
   }
 
