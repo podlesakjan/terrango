@@ -11,11 +11,11 @@ class MapCameraStorage {
 
   Future<void> save(CameraState cameraState) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_keyLat, cameraState.center.coordinates.lat);
-    await prefs.setDouble(_keyLng, cameraState.center.coordinates.lng);
-    await prefs.setDouble(_keyZoom, cameraState.zoom);
-    await prefs.setDouble(_keyBearing, cameraState.bearing);
-    await prefs.setDouble(_keyPitch, cameraState.pitch);
+    await prefs.setDouble(_keyLat, cameraState.center.coordinates.lat.toDouble());
+    await prefs.setDouble(_keyLng, cameraState.center.coordinates.lng.toDouble());
+    await prefs.setDouble(_keyZoom, cameraState.zoom.toDouble());
+    await prefs.setDouble(_keyBearing, cameraState.bearing.toDouble());
+    await prefs.setDouble(_keyPitch, cameraState.pitch.toDouble());
   }
 
   Future<CameraOptions?> load() async {

@@ -66,7 +66,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       ref.read(gameSocketEventControllerProvider).resumeSession();
       _sendLocationUpdateFromCurrentPosition();
       _ensureLocationHeartbeat();
-      _scheduleViewportSync();
+      _scheduleViewportSync(force: true);
       return;
     }
 
@@ -567,7 +567,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final storedCamera = await _cameraStorage.load();
     if (storedCamera != null && (widget.focusH3Index == null || widget.focusH3Index!.isEmpty)) {
       _cameraInitialized = true;
-      await map.setCamera(storedCamera);
+      await map.setCamera(
+        CameraOptions(
+          center: storedCamera.center,
+          zoom: ref.read(appConfigProvider).mapDefaultZoom,
+          bearing: storedCamera.bearing,
+          pitch: storedCamera.pitch,
+        ),
+      );
       _scheduleViewportSync();
       return;
     }
