@@ -345,6 +345,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     final armyOverview = ref.watch(armyOverviewProvider).valueOrNull;
     final reserveCount = armyOverview?.reserveCount ?? _reserveCount;
     final reserveBs = armyOverview?.reserveBs ?? _reserveBs;
+    final radarSize = MediaQuery.of(context).size.width / 3;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Recruitment Radar')),
@@ -356,8 +357,8 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
             children: [
               Center(
                 child: SizedBox(
-                  width: 220,
-                  height: 220,
+                  width: radarSize,
+                  height: radarSize,
                   child: AnimatedBuilder(
                     animation: _radarController,
                     builder: (context, _) {
