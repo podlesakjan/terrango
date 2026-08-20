@@ -96,7 +96,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
   Future<void> _setupBluetoothAndScan() async {
     if (await FlutterBluePlus.isSupported == false) {
       setState(() =>
-          _addFeedEntryWithoutSetState(message: 'Bluetooth not supported on this device.', isError: true));
+          _addFeedEntryWithoutSetState(message: 'Recruitment hardware not available.', isError: true));
       return;
     }
 
@@ -108,7 +108,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
           _stopScan(showMessage: false);
           if (state == BluetoothAdapterState.off) {
             setState(() => _addFeedEntryWithoutSetState(
-                  message: 'Bluetooth is off. Please turn it on for recruitment to work.',
+                  message: 'Recruitment hardware is disabled. Please enable Bluetooth.',
                   isError: true,
                 ));
           }
@@ -120,13 +120,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     await FlutterBluePlus.turnOn();
   }
 
-  void _startUiTicker() {
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
-        setState(() {});
-      }
-    });
-  }
+
 
   Future<void> _startScan() async {
     if (_isScanning) {
@@ -144,11 +138,11 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
       setState(() {
         _isScanning = true;
         _addFeedEntryWithoutSetState(
-            message: 'Scanner started. Waiting for nearby Bluetooth IDs.', isError: false);
+            message: 'Recruitment scanner is online. Searching for signals.', isError: false);
       });
     } catch (error) {
       setState(
-          () => _addFeedEntryWithoutSetState(message: 'Failed to start scanner: $error', isError: true));
+          () => _addFeedEntryWithoutSetState(message: 'Recruitment scanner failed to start.', isError: true));
     }
   }
 
@@ -166,7 +160,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
       _isScanning = false;
     });
     if (wasScanning && showMessage) {
-      setState(() => _addFeedEntryWithoutSetState(message: 'Scanner stopped.', isError: false));
+      setState(() => _addFeedEntryWithoutSetState(message: 'Recruitment scanner is offline.', isError: false));
     }
   }
 
@@ -269,12 +263,12 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     required Map<String, dynamic>? recruitedSoldier,
   }) {
     if (status == 'SUCCESS') {
-      return _successRecruitMessage(bluetoothId, recruitedSoldier);
+      return _successRecruitMessage(recruitedSoldier);
     }
     if (status == 'SKIPPED') {
-      return 'ID already scanned previously -> Recruitment skipped for $bluetoothId 🚫';
+      return 'Signal already processed. Skipping analysis. 🚫';
     }
-    return 'Recruitment result received for $bluetoothId.';
+    return 'Recruitment signal processed.';
   }
 
   String _detectedRecruitMessage({
@@ -284,15 +278,14 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     final bs = (calculatedSoldier['bs'] as num?)?.toInt() ?? 0;
     final signal = (calculatedSoldier['signal'] as String?) ?? 'Signal';
     final unitLabel = _unitLabel(calculatedSoldier);
-    return '$signal detected -> Locking onto $bluetoothId and preparing $unitLabel ($bs BS).';
+    return '$signal detected -> New potential recruit found: $unitLabel ($bs BS).';
   }
 
   String _successRecruitMessage(
-    String bluetoothId,
     Map<String, dynamic>? recruitedSoldier,
   ) {
     if (recruitedSoldier == null) {
-      return 'Recruitment completed for $bluetoothId.';
+      return 'Recruitment completed.';
     }
 
     final bs = (recruitedSoldier['bs'] as num?)?.toInt() ?? 0;
