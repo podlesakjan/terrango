@@ -22,6 +22,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
       <String, Map<String, dynamic>>{};
 
   StreamSubscription<List<ScanResult>>? _scanResultsSub;
+  StreamSubscription<BluetoothAdapterState>? _adapterStateSub;
   StreamSubscription<Map<String, dynamic>>? _socketEventsSub;
   Timer? _ticker;
   late final AnimationController _radarController;
@@ -41,13 +42,14 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     )..repeat();
     _bindSocket();
     _startUiTicker();
-    _startScan();
+    _setupBluetoothAndScan();
   }
 
   @override
   void dispose() {
     _scanResultsSub?.cancel();
     _socketEventsSub?.cancel();
+    _adapterStateSub?.cancel();
     _ticker?.cancel();
     _radarController.dispose();
     unawaited(FlutterBluePlus.stopScan());
@@ -101,6 +103,32 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     });
   }
 
+  Future<void> _setupBluetoothAndScan() async {
+    if (await FlutterBluePlus.isSupported == false) {
+      _addFeedEntry(message: 'Bluetooth not supported on this device.', isError: true);
+      return;
+    }
+
+    _adapterStateSub = FlutterBluePlus.adapterState.listen((state) {
+      if (mounted) {
+        if (state == BluetoothAdapterState.on) {
+          _startScan();
+        } else {
+          _stopScan(showMessage: false);
+          if (state == BluetoothAdapterState.off) {
+            _addFeedEntry(
+              message: 'Bluetooth is off. Please turn it on for recruitment to work.',
+              isError: true,
+            );
+          }
+        }
+      }
+    });
+
+    // This will request the user to turn on bluetooth if it's off
+    await FlutterBluePlus.turnOn();
+  }
+
   void _startUiTicker() {
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
@@ -131,7 +159,7 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     }
   }
 
-  Future<void> _stopScan() async {
+  Future<void> _stopScan({bool showMessage = true}) async {
     try {
       await FlutterBluePlus.stopScan();
     } catch (_) {
@@ -140,10 +168,13 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
     if (!mounted) {
       return;
     }
+    final wasScanning = _isScanning;
     setState(() {
       _isScanning = false;
     });
-    _addFeedEntry(message: 'Scanner stopped.', isError: false);
+    if (wasScanning && showMessage) {
+      _addFeedEntry(message: 'Scanner stopped.', isError: false);
+    }
   }
 
   void _onScanResults(List<ScanResult> results) {
@@ -360,25 +391,6 @@ class _RecruitmentScreenState extends ConsumerState<RecruitmentScreen>
                 ),
               ),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _isScanning ? null : _startScan,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('Start Scan'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: _isScanning ? _stopScan : null,
-                      icon: const Icon(Icons.pause),
-                      label: const Text('Stop Scan'),
-                    ),
-                  ),
-                ],
-              ),
               const SizedBox(height: 12),
               Text(
                 'Recruitment feed',
