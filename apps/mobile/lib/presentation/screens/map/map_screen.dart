@@ -127,7 +127,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _sendLocationUpdate(position, h3Index);
     _refreshHexSource();
     _updateGpsPuck();
-    //_setInitialCameraIfPossible();
+    _setInitialCameraIfPossible();
   }
 
   void _ensureLocationHeartbeat() {
@@ -237,12 +237,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 return MapWidget(
                   key: const ValueKey('terrango_mapbox'),
                   styleUri: config.mapOutdoorStyleUri,
-                  viewport: CameraViewportState(
-                    zoom: config.mapDefaultZoom,
-                    center: widget.focusH3Index != null && widget.focusH3Index!.isNotEmpty
-                        ? _initialCenterFromState(hexes)
-                        : Point(coordinates: Position(14.4378, 50.0755)),
-                  ),
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
                     await _syncVisibleHexesFromViewport(forceSnapshot: true);
