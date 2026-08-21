@@ -668,11 +668,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   int _viewportRadiusFromZoom(double zoom) {
-    if (zoom >= 15) return 2;
-    if (zoom >= 13) return 3;
-    if (zoom >= 11) return 4;
-    if (zoom >= 9) return 5;
-    return 6;
+    if (zoom >= 15) return 3;
+    if (zoom >= 13) return 5;
+    if (zoom >= 11) return 7;
+    if (zoom >= 9) return 9;
+    return 10;
   }
 
   void _openHexContextSheet(
