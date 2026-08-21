@@ -580,21 +580,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    final storedCamera = await _cameraStorage.load();
-    if (storedCamera != null && (widget.focusH3Index == null || widget.focusH3Index!.isEmpty)) {
-      _cameraInitialized = true;
-      await map.setCamera(
-        CameraOptions(
-          center: storedCamera.center,
-          zoom: ref.read(appConfigProvider).mapDefaultZoom,
-          bearing: storedCamera.bearing,
-          pitch: storedCamera.pitch,
-        ),
-      );
-      _scheduleViewportSync();
-      return;
-    }
-
     final focusedH3Index = widget.focusH3Index?.trim();
     if (focusedH3Index != null && focusedH3Index.isNotEmpty) {
       final center = _h3.h3ToGeo(_parseH3(focusedH3Index));
@@ -609,21 +594,34 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    final position = _currentPosition;
-    if (position == null) {
+    final storedCamera = await _cameraStorage.load();
+    if (storedCamera != null) {
+      _cameraInitialized = true;
+      await map.setCamera(
+        CameraOptions(
+          center: storedCamera.center,
+          zoom: ref.read(appConfigProvider).mapDefaultZoom,
+          bearing: storedCamera.bearing,
+          pitch: storedCamera.pitch,
+        ),
+      );
+      _scheduleViewportSync();
       return;
     }
 
-    _cameraInitialized = true;
-    await map.setCamera(
-      CameraOptions(
-        center: Point(
-          coordinates: Position(position.longitude, position.latitude),
+    final position = _currentPosition;
+    if (position != null) {
+      _cameraInitialized = true;
+      await map.setCamera(
+        CameraOptions(
+          center: Point(
+            coordinates: Position(position.longitude, position.latitude),
+          ),
+          zoom: ref.read(appConfigProvider).mapDefaultZoom,
         ),
-        zoom: ref.read(appConfigProvider).mapDefaultZoom,
-      ),
-    );
-    _scheduleViewportSync();
+      );
+      _scheduleViewportSync();
+    }
   }
 
   void _scheduleViewportSync({bool force = false}) {
