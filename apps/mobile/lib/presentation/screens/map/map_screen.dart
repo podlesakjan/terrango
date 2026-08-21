@@ -248,7 +248,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   styleUri: config.mapOutdoorStyleUri,
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
-                    await _syncVisibleHexesFromViewport(forceSnapshot: true);
                     if (!_tapInteractionInstalled) {
                       _tapInteractionInstalled = true;
                       mapboxMap.addInteraction(
@@ -280,7 +279,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       await _setInitialCameraIfPossible();
                     }
 
-                    _scheduleViewportSync();
+                    _scheduleViewportSync(force: true);
                   },
                   onCameraChangeListener: (_) {
                     _scheduleViewportSync();
