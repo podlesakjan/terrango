@@ -1220,25 +1220,40 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
               ? 'This hex is free and can be occupied from your reserves.'
               : 'This is your first claimed hex. Establish your Home Territory here.',
         ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _territoryNameController,
-          decoration: InputDecoration(
-            labelText: hasHomeTerritory ? 'New territory name (optional)' : 'Home territory name',
-          ),
-        ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         if (!hasHomeTerritory)
-          FilledButton.icon(
-            onPressed: () => widget.onEstablishPressed(
-              _territoryNameController.text.trim().isEmpty
-                  ? 'Home Territory'
-                  : _territoryNameController.text.trim(),
-            ),
-            icon: const Icon(Icons.home_filled),
-            label: const Text('Establish Home Territory'),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _territoryNameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Home territory name',
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: () => widget.onEstablishPressed(
+                  _territoryNameController.text.trim().isEmpty
+                      ? 'Home Territory'
+                      : _territoryNameController.text.trim(),
+                ),
+                icon: const Icon(Icons.home_filled),
+                label: const Text('Establish'),
+              ),
+            ],
           )
-        else
+        else ...[
+          TextField(
+            controller: _territoryNameController,
+            decoration: const InputDecoration(
+              labelText: 'New territory name (optional)',
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 8),
           _BucketActionList(
             title: 'Reserve composition',
             emptyMessage: 'No reserve units available. Open Recruitment first.',
@@ -1261,6 +1276,7 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
               ),
             ],
           ),
+        ],
       ],
     );
   }
