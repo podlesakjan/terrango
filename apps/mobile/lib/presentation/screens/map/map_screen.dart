@@ -1208,18 +1208,21 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
     final territoryData = ref.watch(territoryListProvider).valueOrNull;
     final hasHomeTerritory = territoryData != null && territoryData['home'] != null;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(_sheetTitle(state), style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 6),
-        Text(widget.hex.h3Index, style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 16),
-        if (state == 'FREE') _buildFreeContent(detail, reserveBuckets, hasHomeTerritory),
-        if (state == 'OWNED') _buildOwnedContent(detail, reserveBuckets),
-        if (state == 'ENEMY') _buildEnemyContent(detail, reserveBuckets),
-      ],
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_sheetTitle(state), style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 6),
+          Text(widget.hex.h3Index, style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 16),
+          if (state == 'FREE')
+            _buildFreeContent(detail, reserveBuckets, hasHomeTerritory),
+          if (state == 'OWNED') _buildOwnedContent(detail, reserveBuckets),
+          if (state == 'ENEMY') _buildEnemyContent(detail, reserveBuckets),
+        ],
+      ),
     );
   }
 
