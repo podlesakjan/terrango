@@ -228,8 +228,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (previous?.scoutResult != next.scoutResult) {
         _showInfo(_describeScoutResult(next.scoutResult));
       }
-      if (previous?.battleResult != next.battleResult) {
-        _showInfo(_describeBattleResult(next.battleResult));
+      if (previous?.battleResult != next.battleResult && next.battleResult != null) {
+        _showBattleResult(next.battleResult!);
       }
     });
 
@@ -940,17 +940,36 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return 'Scout result received.';
   }
 
-  String _describeBattleResult(Map<String, dynamic>? payload) {
-    if (payload == null) {
-      return 'Battle result received.';
+  void _showBattleResult(Map<String, dynamic> payload) {
+    if (!mounted) {
+      return;
     }
 
     final result = (payload['result'] as String?)?.toUpperCase() ?? 'UNKNOWN';
-    final targetH3Index = payload['h3Index'] as String?;
-    final dead = (payload['myDeadCount'] as num?)?.toInt();
+    final dead = (payload['myDeadCount'] as num?)?.toInt() ?? 0;
     final survivors = payload['mySurvivors'];
     final survivorCount = survivors is List ? survivors.length : 0;
-    return 'Battle $result${targetH3Index != null ? ' on $targetH3Index' : ''}: $dead dead, $survivorCount survivors.';
+
+    final title = 'Battle $result!';
+    final content = 'Losses: $dead\nSurvivors: $survivorCount';
+
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(content),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Dismiss'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _saveCameraPosition() async {
