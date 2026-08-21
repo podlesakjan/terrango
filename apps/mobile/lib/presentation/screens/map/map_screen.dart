@@ -687,6 +687,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF131A24),
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 2 / 3,
+      ),
       builder: (context) {
         return Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
