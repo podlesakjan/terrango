@@ -449,7 +449,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       FillLayer(
         id: _hexFillLayerId,
         sourceId: _hexSourceId,
-        fillOpacity: 0.4,
+        fillOpacity: 0.7,
         fillColorExpression: [
           'match',
           ['get', 'state'],
@@ -457,6 +457,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
           '#2196F3',
           'enemy',
           '#E53935',
+          'free',
+          '#BDBDBD',
           '#9E9E9E',
         ],
       ),
@@ -466,7 +468,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       LineLayer(
         id: _hexLineLayerId,
         sourceId: _hexSourceId,
-        lineOpacity: 0.95,
+        lineOpacity: 1.0,
         lineColorExpression: [
           'case',
           ['==', ['get', 'isCurrent'], true],
@@ -480,8 +482,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
         lineWidthExpression: [
           'case',
           ['==', ['get', 'isCurrent'], true],
-          3.4,
-          2.2,
+          3.5,
+          2.5,
         ],
       ),
     );
