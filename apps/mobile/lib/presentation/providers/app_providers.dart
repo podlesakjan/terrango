@@ -132,6 +132,12 @@ final visibleHexesProvider = StreamProvider<List<HexTile>>((ref) {
   return repository.watchVisibleHexes();
 });
 
+final hexDetailProvider =
+    FutureProvider.family<Map<String, dynamic>, String>((ref, h3Index) {
+  final gameApi = ref.watch(gameApiDataSourceProvider);
+  return gameApi.getHexDetail(h3Index);
+});
+
 final nicknameProvider = StateProvider<String>((ref) => '');
 
 final onboardingCompletedProvider =

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,11 +16,13 @@ import 'package:h3_flutter/h3_flutter.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../providers/app_providers.dart';
+import '../../providers/location_provider.dart';
+import 'map_h3_helpers.dart';
 import '../../../core/routing/app_router.dart';
 import '../../../domain/entities/army_overview.dart';
 import '../../../domain/entities/hex_tile.dart';
-import '../../providers/app_providers.dart';
-import 'map_camera_storage.dart';
+
 
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key, this.focusH3Index});
@@ -38,12 +41,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _hexTapInteractionId = 'hex-map-tap';
 
   final H3 _h3 = const H3Factory().load();
-  final _cameraStorage = MapCameraStorage();
+
 
   MapboxMap? _mapboxMap;
   StreamSubscription<geolocator.Position>? _positionSubscription;
-  geolocator.Position? _currentPosition;
-  String? _currentH3Index;
   bool _styleReady = false;
   bool _cameraInitialized = false;
   bool _tapInteractionInstalled = false;
@@ -78,7 +79,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.inactive) {
-      unawaited(_saveCameraPosition());
+
       _locationHeartbeatTimer?.cancel();
       _locationHeartbeatTimer = null;
     }
@@ -86,7 +87,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   @override
   void dispose() {
-    unawaited(_saveCameraPosition());
+    
     WidgetsBinding.instance.removeObserver(this);
     _positionSubscription?.cancel();
     _viewportSyncDebounce?.cancel();
@@ -124,15 +125,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     ).listen(_onNewPosition);
   }
 
-  void _onNewPosition(geolocator.Position position) {
-    final h3Index = _toH3IndexString(position.latitude, position.longitude);
+  Future<void> _onNewPosition(geolocator.Position position) async {
+    final h3Index = await _toH3IndexString(position.latitude, position.longitude);
 
-    if (mounted) {
-      setState(() {
-        _currentPosition = position;
-        _currentH3Index = h3Index;
-      });
-    }
+    ref.read(locationProvider.notifier).updateLocation(position, h3Index);
 
     _sendLocationUpdate(position, h3Index);
     _refreshHexSource();
@@ -151,8 +147,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   void _sendLocationUpdateFromCurrentPosition() {
-    final position = _currentPosition;
-    final h3Index = _currentH3Index;
+    final location = ref.read(locationProvider);
+    final position = location.position;
+    final h3Index = location.h3Index;
     if (position == null || h3Index == null || h3Index.isEmpty) {
       return;
     }
@@ -251,11 +248,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     if (!_tapInteractionInstalled) {
                       _tapInteractionInstalled = true;
                       mapboxMap.addInteraction(
-                        TapInteraction.onMap((gestureContext) {
+                        TapInteraction.onMap((gestureContext) async {
                           if (gestureContext.gestureState != GestureState.ended) {
                             return;
                           }
-                          final tappedH3 = _toH3IndexString(
+                          final tappedH3 = await _toH3IndexString(
                             gestureContext.point.coordinates.lat.toDouble(),
                             gestureContext.point.coordinates.lng.toDouble(),
                           );
@@ -401,11 +398,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Point _initialCenterFromState(List<HexTile> hexes) {
-    if (_currentPosition != null) {
+    final currentPosition = ref.read(locationProvider).position;
+    if (currentPosition != null) {
       return Point(
         coordinates: Position(
-          _currentPosition!.longitude,
-          _currentPosition!.latitude,
+          currentPosition.longitude,
+          currentPosition.latitude,
         ),
       );
     }
@@ -439,7 +437,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         id: _hexSourceId,
         data: jsonEncode(_buildHexFeatureCollection(
             ref.read(visibleHexesProvider).value ?? const [],
-            _currentH3Index,
+            ref.read(locationProvider).h3Index,
             _h3)),
       ),
     );
@@ -502,7 +500,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final source = await map.style.getSource(_hexSourceId);
     if (source is GeoJsonSource) {
       final h3 = _h3;
-      final currentH3Index = _currentH3Index;
+      final currentH3Index = ref.read(locationProvider).h3Index;
       final geoJson = await Isolate.run(
         () => jsonEncode(
             _buildHexFeatureCollection(hexes, currentH3Index, h3)),
@@ -579,7 +577,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    final focusedH3Index = widget.focusH3Index?.trim();
+      final focusedH3Index = widget.focusH3Index?.trim();
     if (focusedH3Index != null && focusedH3Index.isNotEmpty) {
       final center = _h3.h3ToGeo(_parseH3(focusedH3Index));
       _cameraInitialized = true;
@@ -593,22 +591,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    final storedCamera = await _cameraStorage.load();
-    if (storedCamera != null) {
-      _cameraInitialized = true;
-      await map.setCamera(
-        CameraOptions(
-          center: storedCamera.center,
-          zoom: ref.read(appConfigProvider).mapDefaultZoom,
-          bearing: storedCamera.bearing,
-          pitch: storedCamera.pitch,
-        ),
-      );
-      _scheduleViewportSync();
-      return;
-    }
-
-    final position = _currentPosition;
+    final position = ref.read(locationProvider).position;
     if (position != null) {
       _cameraInitialized = true;
       await map.setCamera(
@@ -640,16 +623,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final cameraState = await map.getCameraState();
       final center = cameraState.center.coordinates;
       final zoom = cameraState.zoom;
-      final centerH3Index = _toH3IndexString(
+      final centerH3Index = await _toH3IndexString(
         center.lat.toDouble(),
         center.lng.toDouble(),
       );
 
       final radius = _viewportRadiusFromZoom(zoom);
-      final visibleIndexes = _h3
-          .kRing(_parseH3(centerH3Index), radius)
-          .map((index) => index.toRadixString(16))
-          .toSet();
+      final visibleIndexes = await MapH3Calculations.kRing(centerH3Index, radius);
 
       final controller = ref.read(gameSocketEventControllerProvider);
       if (!_socketInitialized || forceSnapshot) {
@@ -692,7 +672,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           child: _HexContextSheet(
             hex: hex,
-            currentH3Index: _currentH3Index,
+            currentH3Index: ref.read(locationProvider).h3Index,
             onEstablishPressed: (territoryName) => _establishTerritory(
               hex,
               territoryName,
@@ -759,7 +739,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     List<Map<String, dynamic>> composition,
     String? territoryName,
   ) async {
-    if (_currentPosition == null) {
+    final currentPosition = ref.read(locationProvider).position;
+    if (currentPosition == null) {
       _showInfo('Please wait for GPS location first.');
       return;
     }
@@ -772,8 +753,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     try {
       await ref.read(gameApiDataSourceProvider).occupyHex(
             h3Index: hex.h3Index,
-            latitude: _currentPosition!.latitude,
-            longitude: _currentPosition!.longitude,
+            latitude: currentPosition.latitude,
+            longitude: currentPosition.longitude,
             garrisonComposition: composition,
             territoryName: territoryName,
           );
@@ -863,7 +844,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   Future<void> _attackHex(HexTile hex, List<Map<String, dynamic>> composition) async {
-    if (_currentH3Index != hex.h3Index) {
+    if (ref.read(locationProvider).h3Index != hex.h3Index) {
       _showInfo('You can attack only while physically standing in this hex.');
       return;
     }
@@ -887,9 +868,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   BigInt _parseH3(String h3Index) => BigInt.parse(h3Index, radix: 16);
 
-  String _toH3IndexString(double lat, double lon) {
-    final h3Index = _h3.geoToH3(GeoCoord(lat: lat, lon: lon), 9);
-    return h3Index.toRadixString(16);
+  Future<String> _toH3IndexString(double lat, double lon) {
+    return MapH3Calculations.geoToH3(lat, lon);
   }
 
   bool _canSendReinforcements(HexTile hex) {
@@ -969,21 +949,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  Future<void> _saveCameraPosition() async {
-    final map = _mapboxMap;
-    if (map == null) {
-      return;
-    }
-    try {
-      final cameraState = await map.getCameraState();
-      await _cameraStorage.save(cameraState);
-    } catch (_) {
-      // It's fine to ignore, not critical.
-    }
-  }
+
 
   void _centerMapOnUser() {
-    final position = _currentPosition;
+    final position = ref.read(locationProvider).position;
     final map = _mapboxMap;
     if (position == null || map == null) {
       _showInfo('Current location not available.');
@@ -1069,7 +1038,7 @@ typedef _OccupyHexCallback = Future<void> Function(
   String? territoryName,
 );
 
-class _HexContextSheet extends ConsumerStatefulWidget {
+class _HexContextSheet extends ConsumerWidget {
   const _HexContextSheet({
     required this.hex,
     required this.currentH3Index,
@@ -1093,90 +1062,37 @@ class _HexContextSheet extends ConsumerStatefulWidget {
   final void Function(List<Map<String, dynamic>> composition) onDeployPressed;
   final void Function(List<Map<String, dynamic>> composition) onWithdrawPressed;
   final void Function(List<Map<String, dynamic>> composition)
-  onSendReinforcementPressed;
+      onSendReinforcementPressed;
   final void Function(List<Map<String, dynamic>> composition)
-  onSendReinforcementBurnPressed;
+      onSendReinforcementBurnPressed;
   final void Function(List<Map<String, dynamic>> composition)
-  onSendReinforcementLossyPressed;
+      onSendReinforcementLossyPressed;
   final VoidCallback onScoutPressed;
   final void Function(List<Map<String, dynamic>> composition) onAttackPressed;
 
   @override
-  ConsumerState<_HexContextSheet> createState() => _HexContextSheetState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final detailAsync = ref.watch(hexDetailProvider(hex.h3Index));
+    final territoryNameController = useTextEditingController(
+      text: hex.state == HexState.free
+          ? 'New Outpost'
+          : hex.territoryName ?? '',
+    );
 
-class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
-  final TextEditingController _territoryNameController = TextEditingController();
-  AsyncValue<Map<String, dynamic>> _detail = const AsyncValue.loading();
-  StreamSubscription<Map<String, dynamic>>? _eventSubscription;
-
-  @override
-  void initState() {
-    super.initState();
-    _territoryNameController.text = widget.hex.state == HexState.free
-        ? 'New Outpost'
-        : widget.hex.territoryName ?? '';
-    unawaited(_refreshDetail());
-    _eventSubscription = ref
-        .read(gameSocketEventControllerProvider)
-        .events
-        .listen(_handleSocketEvent);
-  }
-
-  @override
-  void dispose() {
-    _eventSubscription?.cancel();
-    _territoryNameController.dispose();
-    super.dispose();
-  }
-
-  bool get _isStandingInHex => widget.currentH3Index == widget.hex.h3Index;
-
-  Future<void> _refreshDetail() async {
-    try {
-      final detail = await ref
-          .read(gameApiDataSourceProvider)
-          .getHexDetail(widget.hex.h3Index);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _detail = AsyncValue.data(detail);
+    ref.listen(gameSocketEventControllerProvider.select((s) => s.events),
+        (_, eventStream) {
+      eventStream.listen((event) {
+        if (event['data']?['h3Index'] == hex.h3Index) {
+          ref.invalidate(hexDetailProvider(hex.h3Index));
+        }
       });
-    } catch (error, stackTrace) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _detail = AsyncValue.error(error, stackTrace);
-      });
-    }
-  }
+    });
 
-  void _handleSocketEvent(Map<String, dynamic> eventEnvelope) {
-    final eventName = eventEnvelope['event'] as String?;
-    final payload = eventEnvelope['data'];
-
-    if (eventName == 'hex_detail_update' && payload is Map<String, dynamic>) {
-      if (payload['h3Index'] == widget.hex.h3Index && mounted) {
-        setState(() {
-          _detail = AsyncValue.data(payload);
-        });
-      }
-      return;
-    }
-
-    if (eventName == 'army_update' || eventName == 'territory_update') {
-      unawaited(_refreshDetail());
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: _detail.when(
-        data: _buildDetailContent,
+      child: detailAsync.when(
+        data: (detail) =>
+            _buildDetailContent(context, ref, detail, territoryNameController),
         loading: () => const Padding(
           padding: EdgeInsets.symmetric(vertical: 48),
           child: Center(child: CircularProgressIndicator()),
@@ -1190,7 +1106,7 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
               Text('Failed to load hex details: $error'),
               const SizedBox(height: 12),
               FilledButton.icon(
-                onPressed: _refreshDetail,
+                onPressed: () => ref.invalidate(hexDetailProvider(hex.h3Index)),
                 icon: const Icon(Icons.refresh),
                 label: const Text('Retry'),
               ),
@@ -1201,35 +1117,47 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
     );
   }
 
-  Widget _buildDetailContent(Map<String, dynamic> detail) {
+  Widget _buildDetailContent(
+    BuildContext context,
+    WidgetRef ref,
+    Map<String, dynamic> detail,
+    TextEditingController territoryNameController,
+  ) {
     final state = (detail['state'] as String? ?? '').toUpperCase();
     final army = ref.watch(armyOverviewProvider).valueOrNull;
     final reserveBuckets = army?.reserves ?? const <SoldierBucketSummary>[];
     final territoryData = ref.watch(territoryListProvider).valueOrNull;
-    final hasHomeTerritory = territoryData != null && territoryData['home'] != null;
+    final hasHomeTerritory =
+        territoryData != null && territoryData['home'] != null;
 
     return SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_sheetTitle(state), style: Theme.of(context).textTheme.titleLarge),
+          Text(_sheetTitle(state),
+              style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),
-          Text(widget.hex.h3Index, style: Theme.of(context).textTheme.bodySmall),
+          Text(hex.h3Index, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 16),
           if (state == 'FREE')
-            _buildFreeContent(detail, reserveBuckets, hasHomeTerritory),
-          if (state == 'OWNED') _buildOwnedContent(detail, reserveBuckets),
-          if (state == 'ENEMY') _buildEnemyContent(detail, reserveBuckets),
+            _buildFreeContent(context, detail, reserveBuckets,
+                hasHomeTerritory, territoryNameController),
+          if (state == 'OWNED')
+            _buildOwnedContent(context, ref, detail, reserveBuckets),
+          if (state == 'ENEMY')
+            _buildEnemyContent(context, detail, reserveBuckets),
         ],
       ),
     );
   }
 
   Widget _buildFreeContent(
+    BuildContext context,
     Map<String, dynamic> detail,
     List<SoldierBucketSummary> reserveBuckets,
     bool hasHomeTerritory,
+    TextEditingController territoryNameController,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1246,7 +1174,7 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
             children: [
               Expanded(
                 child: TextField(
-                  controller: _territoryNameController,
+                  controller: territoryNameController,
                   decoration: const InputDecoration(
                     labelText: 'Home territory name',
                   ),
@@ -1254,10 +1182,10 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
               ),
               const SizedBox(width: 8),
               FilledButton.icon(
-                onPressed: () => widget.onEstablishPressed(
-                  _territoryNameController.text.trim().isEmpty
+                onPressed: () => onEstablishPressed(
+                  territoryNameController.text.trim().isEmpty
                       ? 'Home Territory'
-                      : _territoryNameController.text.trim(),
+                      : territoryNameController.text.trim(),
                 ),
                 icon: const Icon(Icons.home_filled),
                 label: const Text('Establish'),
@@ -1266,7 +1194,7 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
           )
         else ...[
           TextField(
-            controller: _territoryNameController,
+            controller: territoryNameController,
             decoration: const InputDecoration(
               labelText: 'New territory name (optional)',
               isDense: true,
@@ -1281,15 +1209,16 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
               _BucketAction(
                 label: 'Occupy territory',
                 onPressed: (bucket) async {
-                  final count = await _promptCount(bucket, 'Occupy territory');
+                  final count =
+                      await _promptCount(context, bucket, 'Occupy territory');
                   if (count == null) {
                     return;
                   }
-                  await widget.onOccupyPressed(
+                  await onOccupyPressed(
                     [_payloadFromBucket(bucket, count)],
-                    _territoryNameController.text.trim().isEmpty
+                    territoryNameController.text.trim().isEmpty
                         ? null
-                        : _territoryNameController.text.trim(),
+                        : territoryNameController.text.trim(),
                   );
                 },
               ),
@@ -1301,12 +1230,16 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
   }
 
   Widget _buildOwnedContent(
+    BuildContext context,
+    WidgetRef ref,
     Map<String, dynamic> detail,
     List<SoldierBucketSummary> reserveBuckets,
   ) {
-    final territory = detail['territory'] as Map<String, dynamic>? ?? const <String, dynamic>{};
+    final territory =
+        detail['territory'] as Map<String, dynamic>? ?? const <String, dynamic>{};
     final territoryType = (territory['type'] as String? ?? '').toUpperCase();
-    final garrison = detail['garrison'] as Map<String, dynamic>? ?? const <String, dynamic>{};
+    final garrison =
+        detail['garrison'] as Map<String, dynamic>? ?? const <String, dynamic>{};
     final garrisonBuckets = _bucketsFromDynamicList(garrison['composition']);
     final defenseActive = _isDefenseActive(ref.watch(sessionSyncProvider));
     final canChangeCenter = territoryType == 'HOME' || detail['isCenter'] == true;
@@ -1317,7 +1250,8 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Territory name: ${(territory['name'] as String?) ?? 'Unknown territory'}'),
+        Text(
+            'Territory name: ${(territory['name'] as String?) ?? 'Unknown territory'}'),
         const SizedBox(height: 8),
         Row(
           children: [
@@ -1326,14 +1260,15 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
             const Expanded(child: Text('Set as Center 👑')),
             Switch(
               value: detail['isCenter'] == true,
-              onChanged: canChangeCenter ? widget.onSetCenterChanged : null,
+              onChanged: canChangeCenter ? onSetCenterChanged : null,
             ),
           ],
         ),
         if (!canChangeCenter)
           const Padding(
             padding: EdgeInsets.only(bottom: 8),
-            child: Text('Only hexes inside the Home Territory can be assigned as the center.'),
+            child: Text(
+                'Only hexes inside the Home Territory can be assigned as the center.'),
           ),
         Text('Garrison: $garrisonSoldiers soldiers / $garrisonBs BS'),
         const SizedBox(height: 4),
@@ -1347,11 +1282,12 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
             _BucketAction(
               label: 'Withdraw to reserves',
               onPressed: (bucket) async {
-                final count = await _promptCount(bucket, 'Withdraw to reserves');
+                final count = await _promptCount(
+                    context, bucket, 'Withdraw to reserves');
                 if (count == null) {
                   return;
                 }
-                widget.onWithdrawPressed([_payloadFromBucket(bucket, count)]);
+                onWithdrawPressed([_payloadFromBucket(bucket, count)]);
               },
             ),
           ],
@@ -1365,11 +1301,12 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
             _BucketAction(
               label: 'Reinforce garrison',
               onPressed: (bucket) async {
-                final count = await _promptCount(bucket, 'Reinforce garrison');
+                final count =
+                    await _promptCount(context, bucket, 'Reinforce garrison');
                 if (count == null) {
                   return;
                 }
-                widget.onDeployPressed([_payloadFromBucket(bucket, count)]);
+                onDeployPressed([_payloadFromBucket(bucket, count)]);
               },
             ),
             if (territoryType == 'HOME')
@@ -1377,11 +1314,13 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
                 label: 'Send instantly',
                 enabled: defenseActive,
                 onPressed: (bucket) async {
-                  final count = await _promptCount(bucket, 'Send instant reinforcements');
+                  final count = await _promptCount(
+                      context, bucket, 'Send instant reinforcements');
                   if (count == null) {
                     return;
                   }
-                  widget.onSendReinforcementPressed([_payloadFromBucket(bucket, count)]);
+                  onSendReinforcementPressed(
+                      [_payloadFromBucket(bucket, count)]);
                 },
               )
             else ...[
@@ -1389,22 +1328,26 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
                 label: 'Burn 1 Support',
                 enabled: defenseActive,
                 onPressed: (bucket) async {
-                  final count = await _promptCount(bucket, 'Send reinforced outpost support');
+                  final count = await _promptCount(
+                      context, bucket, 'Send reinforced outpost support');
                   if (count == null) {
                     return;
                   }
-                  widget.onSendReinforcementBurnPressed([_payloadFromBucket(bucket, count)]);
+                  onSendReinforcementBurnPressed(
+                      [_payloadFromBucket(bucket, count)]);
                 },
               ),
               _BucketAction(
                 label: 'Send with 40% losses',
                 enabled: defenseActive,
                 onPressed: (bucket) async {
-                  final count = await _promptCount(bucket, 'Send lossy reinforcements');
+                  final count = await _promptCount(
+                      context, bucket, 'Send lossy reinforcements');
                   if (count == null) {
                     return;
                   }
-                  widget.onSendReinforcementLossyPressed([_payloadFromBucket(bucket, count)]);
+                  onSendReinforcementLossyPressed(
+                      [_payloadFromBucket(bucket, count)]);
                 },
               ),
             ],
@@ -1422,11 +1365,13 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
   }
 
   Widget _buildEnemyContent(
+    BuildContext context,
     Map<String, dynamic> detail,
     List<SoldierBucketSummary> reserveBuckets,
   ) {
     final canScout = detail['canScout'] == true;
     final canAttack = detail['canAttack'] == true;
+    final isStandingInHex = currentH3Index == hex.h3Index;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1438,7 +1383,7 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
         Row(
           children: [
             FilledButton.tonal(
-              onPressed: canScout ? widget.onScoutPressed : null,
+              onPressed: canScout ? onScoutPressed : null,
               child: const Text('Scout'),
             ),
             const SizedBox(width: 8),
@@ -1450,8 +1395,9 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
         ),
         const SizedBox(height: 8),
         if (!canScout)
-          const Text('Scouting requires a Support unit with the Scout skill while standing in this hex.'),
-        if (!_isStandingInHex)
+          const Text(
+              'Scouting requires a Support unit with the Scout skill while standing in this hex.'),
+        if (!isStandingInHex)
           const Padding(
             padding: EdgeInsets.only(top: 4),
             child: Text('To attack, you must physically stand in this hex.'),
@@ -1466,11 +1412,12 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
               label: 'ATTACK!',
               enabled: canAttack,
               onPressed: (bucket) async {
-                final count = await _promptCount(bucket, 'Launch attack');
+                final count =
+                    await _promptCount(context, bucket, 'Launch attack');
                 if (count == null) {
                   return;
                 }
-                widget.onAttackPressed([_payloadFromBucket(bucket, count)]);
+                onAttackPressed([_payloadFromBucket(bucket, count)]);
               },
             ),
           ],
@@ -1496,7 +1443,8 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
         .toList(growable: false);
   }
 
-  Map<String, dynamic> _payloadFromBucket(SoldierBucketSummary bucket, int count) {
+  Map<String, dynamic> _payloadFromBucket(
+      SoldierBucketSummary bucket, int count) {
     final safeCount = count.clamp(1, bucket.count);
     final totalBs = bucket.count <= 0
         ? 0
@@ -1510,7 +1458,8 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
     };
   }
 
-  Future<int?> _promptCount(SoldierBucketSummary bucket, String title) async {
+  Future<int?> _promptCount(
+      BuildContext context, SoldierBucketSummary bucket, String title) async {
     final controller = TextEditingController(text: '1');
     final result = await showDialog<int>(
       context: context,
@@ -1551,7 +1500,7 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
   bool _isDefenseActive(SessionSyncState sync) {
     final hexDetail = sync.hexDetailUpdate;
     if (hexDetail != null) {
-      final sameHex = hexDetail['h3Index'] == widget.hex.h3Index;
+      final sameHex = hexDetail['h3Index'] == hex.h3Index;
       final attackFlags = [
         hexDetail['isUnderAttack'],
         hexDetail['underAttack'],
@@ -1564,8 +1513,9 @@ class _HexContextSheetState extends ConsumerState<_HexContextSheet> {
     }
 
     final battleResult = sync.battleResult;
-    if (battleResult != null && battleResult['h3Index'] == widget.hex.h3Index) {
-      return battleResult['result'] == 'VICTORY' || battleResult['result'] == 'DEFEAT';
+    if (battleResult != null && battleResult['h3Index'] == hex.h3Index) {
+      return battleResult['result'] == 'VICTORY' ||
+          battleResult['result'] == 'DEFEAT';
     }
 
     return false;
