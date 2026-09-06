@@ -274,8 +274,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     if (!_cameraInitialized) {
                       await _setInitialCameraIfPossible();
                     }
-
-                    _scheduleViewportSync();
                   },
                   onCameraChangeListener: (_) {
                     _scheduleViewportSync();
