@@ -297,11 +297,20 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `map_subscribe`**
-    *   **Usage:** Requests only H3 indexes newly entering the map cache. The server adds them to the socket subscription and returns their state in `map_grid_update`; the client merges that update into its existing grid. On reconnect, the client resends its cached index set because the server-side socket subscription is new.
+    *   **Usage:** Requests only H3 indexes newly entering the bounded viewport cache. The server adds them to the socket subscription and returns their state in `map_grid_update`; the client merges that update into its existing grid. On reconnect, the client resends its current viewport indexes because the server-side socket subscription is new.
     *   **Payload:**
         ```json
         {
           "visibleH3Indexes": ["891f1a1c62fffff", "891f1a1c62ffffe", "891f1a1c62ffffd"]
+        }
+        ```
+
+*   **Event: `map_unsubscribe`**
+    *   **Usage:** Removes H3 indexes that have left the viewport cache from the socket subscription. This prevents the server and client from retaining an unbounded map grid while panning.
+    *   **Payload:**
+        ```json
+        {
+          "visibleH3Indexes": ["891f1a1c62fffff"]
         }
         ```
 

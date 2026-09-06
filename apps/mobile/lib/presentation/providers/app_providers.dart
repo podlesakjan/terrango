@@ -308,6 +308,23 @@ class GameSocketEventController {
     _emitMapSubscribe(newVisibleH3Indexes);
   }
 
+  /// Replaces the server subscription with the current viewport, keeping both
+  /// client and server map caches bounded while the user pans around.
+  void replaceVisibleArea(Iterable<String> visibleH3Indexes) {
+    final next = visibleH3Indexes.toSet();
+    final removed = _visibleH3Indexes.difference(next);
+    final added = next.difference(_visibleH3Indexes);
+    _visibleH3Indexes
+      ..clear()
+      ..addAll(next);
+    if (_connected && removed.isNotEmpty) {
+      socket.emit('map_unsubscribe', {'visibleH3Indexes': removed.toList()});
+    }
+    if (_connected && added.isNotEmpty) {
+      _emitMapSubscribe(added);
+    }
+  }
+
   void sendLocationUpdate({
     required double latitude,
     required double longitude,

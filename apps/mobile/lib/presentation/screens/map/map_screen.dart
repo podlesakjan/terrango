@@ -31,6 +31,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _hexSourceId = 'hex_source';
   static const _hexFillLayerId = 'hex_fill_layer';
   static const _hexLineLayerId = 'hex_line_layer';
+  static const _currentHexSourceId = 'current_hex_source';
+  static const _currentHexLineLayerId = 'current_hex_line_layer';
 
   final H3 _h3 = const H3Factory().load();
   final _cameraStorage = MapCameraStorage();
@@ -43,9 +45,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _cameraInitialized = false;
   bool _tapInteractionInstalled = false;
   bool _socketInitialized = false;
-  /// Hexes already requested for this map session. The grid is cumulative, so
-  /// panning only needs to ask the server for cells outside this set.
-  Set<String> _requestedH3Indexes = <String>{};
+  final Map<String, List<List<double>>> _hexRingsByIndex =
+      <String, List<List<double>>>{};
   Timer? _viewportSyncDebounce;
   Timer? _locationHeartbeatTimer;
   bool? _appliedWakeLockEnabled;
@@ -122,6 +123,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   void _onNewPosition(geolocator.Position position) {
     final h3Index = _toH3IndexString(position.latitude, position.longitude);
+    final enteredNewHex = h3Index != _currentH3Index;
 
     if (mounted) {
       setState(() {
@@ -131,7 +133,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
 
     _sendLocationUpdate(position, h3Index);
-    _refreshHexSource();
+    if (enteredNewHex) {
+      unawaited(_refreshCurrentHexSource());
+    }
     _updateGpsPuck();
     _setInitialCameraIfPossible();
   }
@@ -233,6 +237,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _showInfo(_describeBattleResult(next.battleResult));
       }
     });
+    ref.listen<AsyncValue<List<HexTile>>>(visibleHexesProvider, (previous, next) {
+      if (next.hasValue && previous?.value != next.value) {
+        unawaited(_refreshHexSource());
+      }
+    });
 
     return Scaffold(
       body: Stack(
@@ -245,7 +254,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   styleUri: config.mapOutdoorStyleUri,
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
-                    await _syncVisibleHexesFromViewport();
                     if (!_tapInteractionInstalled) {
                       _tapInteractionInstalled = true;
                       mapboxMap.addInteraction(
@@ -271,6 +279,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     _styleReady = true;
                     await _ensureGameLayers();
                     _refreshHexSource();
+                    _refreshCurrentHexSource();
                     _updateGpsPuck();
 
                     if (!_cameraInitialized) {
@@ -430,6 +439,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
     try {
       await map.style.removeStyleSource(_hexSourceId);
     } catch (_) {}
+    try {
+      await map.style.removeStyleLayer(_currentHexLineLayerId);
+    } catch (_) {}
+    try {
+      await map.style.removeStyleSource(_currentHexSourceId);
+    } catch (_) {}
 
     await map.style.addSource(
       GeoJsonSource(
@@ -462,20 +477,29 @@ class _MapScreenState extends ConsumerState<MapScreen>
         lineOpacity: 0.95,
         lineColorExpression: [
           'case',
-          ['==', ['get', 'isCurrent'], true],
-          '#FFD54F',
           ['==', ['get', 'state'], 'owned'],
           '#1976D2',
           ['==', ['get', 'state'], 'enemy'],
           '#D32F2F',
           '#757575',
         ],
-        lineWidthExpression: [
-          'case',
-          ['==', ['get', 'isCurrent'], true],
-          3.4,
-          2.2,
-        ],
+        lineWidth: 2.2,
+      ),
+    );
+
+    await map.style.addSource(
+      GeoJsonSource(
+        id: _currentHexSourceId,
+        data: jsonEncode(_buildCurrentHexFeatureCollection()),
+      ),
+    );
+    await map.style.addLayer(
+      LineLayer(
+        id: _currentHexLineLayerId,
+        sourceId: _currentHexSourceId,
+        lineOpacity: 0.95,
+        lineColorExpression: ['literal', '#FFD54F'],
+        lineWidth: 3.4,
       ),
     );
   }
@@ -501,16 +525,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final features = <Map<String, dynamic>>[];
 
     for (final hex in hexes) {
-      final h3Index = _parseH3(hex.h3Index);
-      final boundary = _h3.h3ToGeoBoundary(h3Index);
-      if (boundary.isEmpty) {
+      final ring = _ringForH3Index(hex.h3Index);
+      if (ring == null) {
         continue;
       }
-
-      final ring = boundary
-          .map((coord) => [coord.lon, coord.lat])
-          .toList(growable: true);
-      ring.add([boundary.first.lon, boundary.first.lat]);
 
       features.add({
         'type': 'Feature',
@@ -524,7 +542,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
           'ownerName': hex.ownerName,
           'hasGarrison': hex.hasGarrison,
           'isCenter': hex.isCenter,
-          'isCurrent': hex.h3Index == _currentH3Index,
         },
         'geometry': {
           'type': 'Polygon',
@@ -537,6 +554,53 @@ class _MapScreenState extends ConsumerState<MapScreen>
       'type': 'FeatureCollection',
       'features': features,
     };
+  }
+
+  Map<String, dynamic> _buildCurrentHexFeatureCollection() {
+    final h3Index = _currentH3Index;
+    final ring = h3Index == null ? null : _ringForH3Index(h3Index);
+    return {
+      'type': 'FeatureCollection',
+      'features': ring == null
+          ? const <Map<String, dynamic>>[]
+          : [
+              {
+                'type': 'Feature',
+                'properties': const <String, dynamic>{},
+                'geometry': {'type': 'Polygon', 'coordinates': [ring]},
+              },
+            ],
+    };
+  }
+
+  List<List<double>>? _ringForH3Index(String h3Index) {
+    final cached = _hexRingsByIndex[h3Index];
+    if (cached != null) {
+      return cached;
+    }
+    try {
+      final boundary = _h3.h3ToGeoBoundary(_parseH3(h3Index));
+      if (boundary.isEmpty) {
+        return null;
+      }
+      final ring = boundary.map((coord) => [coord.lon, coord.lat]).toList();
+      ring.add([boundary.first.lon, boundary.first.lat]);
+      _hexRingsByIndex[h3Index] = ring;
+      return ring;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<void> _refreshCurrentHexSource() async {
+    final map = _mapboxMap;
+    if (map == null || !_styleReady) {
+      return;
+    }
+    final source = await map.style.getSource(_currentHexSourceId);
+    if (source is GeoJsonSource) {
+      await source.updateGeoJSON(jsonEncode(_buildCurrentHexFeatureCollection()));
+    }
   }
 
   Future<void> _updateGpsPuck() async {
@@ -593,16 +657,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
-    final position = _currentPosition;
-    if (position == null) {
-      return;
-    }
-
     _cameraInitialized = true;
     await map.setCamera(
       CameraOptions(
-        center: Point(
-          coordinates: Position(position.longitude, position.latitude),
+        center: _initialCenterFromState(
+          ref.read(visibleHexesProvider).value ?? const <HexTile>[],
         ),
         zoom: ref.read(appConfigProvider).mapDefaultZoom,
       ),
@@ -619,7 +678,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _syncVisibleHexesFromViewport() async {
     final map = _mapboxMap;
-    if (map == null) {
+    if (map == null || !_cameraInitialized) {
       return;
     }
 
@@ -638,22 +697,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
           .map((index) => index.toRadixString(16))
           .toSet();
 
+      _hexRingsByIndex.removeWhere(
+        (h3Index, _) => h3Index != _currentH3Index && !visibleIndexes.contains(h3Index),
+      );
+      ref.read(mapRepositoryProvider).setVisibleH3Indexes(visibleIndexes);
+
       final controller = ref.read(gameSocketEventControllerProvider);
       if (!_socketInitialized) {
         _socketInitialized = true;
         controller.connect(visibleH3Indexes: visibleIndexes);
-        _requestedH3Indexes = visibleIndexes;
         return;
       }
-
-      final newVisibleIndexes = visibleIndexes.difference(_requestedH3Indexes);
-      if (newVisibleIndexes.isNotEmpty) {
-        _requestedH3Indexes = <String>{
-          ..._requestedH3Indexes,
-          ...newVisibleIndexes,
-        };
-        controller.sendVisibleArea(newVisibleIndexes);
-      }
+      controller.replaceVisibleArea(visibleIndexes);
     } catch (_) {
       // Ignore viewport sync failures and retry on next camera change.
     }

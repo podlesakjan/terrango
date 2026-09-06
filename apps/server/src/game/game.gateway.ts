@@ -182,6 +182,27 @@ export class GameGateway
     }
   }
 
+  @SubscribeMessage('map_unsubscribe')
+  handleMapUnsubscribe(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: Record<string, unknown>,
+  ): void {
+    try {
+      const userId = this.getSocketUserId(client);
+      const visibleH3Indexes = this.gameService.normalizeVisibleH3Indexes(
+        body.visibleH3Indexes,
+      );
+      const context = this.socketContexts.get(client.id);
+      if (context?.userId === userId) {
+        for (const h3Index of visibleH3Indexes) {
+          context.visibleH3Indexes.delete(h3Index);
+        }
+      }
+    } catch (error) {
+      throw this.toWsException(error);
+    }
+  }
+
   @SubscribeMessage('location_update')
   handleLocationUpdate(
     @ConnectedSocket() client: Socket,
