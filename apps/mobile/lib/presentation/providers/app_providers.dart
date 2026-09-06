@@ -50,24 +50,24 @@ final mapRepositoryProvider = Provider<MapRepository>((ref) {
 final mapRepositorySyncProvider = Provider<void>((ref) {
   final repo = ref.watch(mapRepositoryProvider) as MapRepositoryImpl;
 
-  void applyState(SessionSyncState state) {
+  void applyChanges(SessionSyncState? previous, SessionSyncState state) {
     final mapSnapshot = state.mapSnapshot;
-    if (mapSnapshot != null) {
+    if (mapSnapshot != null && previous?.mapSnapshot != mapSnapshot) {
       repo.applyMapSnapshot(mapSnapshot);
     }
 
     final mapGridUpdate = state.mapGridUpdate;
-    if (mapGridUpdate != null) {
+    if (mapGridUpdate != null && previous?.mapGridUpdate != mapGridUpdate) {
       repo.applyMapGridUpdate(mapGridUpdate);
     }
 
     final hexDetail = state.hexDetailUpdate;
-    if (hexDetail != null) {
+    if (hexDetail != null && previous?.hexDetailUpdate != hexDetail) {
       repo.applyHexDetailUpdate(hexDetail);
     }
 
     final territoryUpdate = state.territoryUpdate;
-    if (territoryUpdate != null) {
+    if (territoryUpdate != null && previous?.territoryUpdate != territoryUpdate) {
       final home = territoryUpdate['home'];
       if (home is Map<String, dynamic>) {
         repo.applyMapGridUpdate({
@@ -85,8 +85,8 @@ final mapRepositorySyncProvider = Provider<void>((ref) {
     }
   }
 
-  applyState(ref.read(sessionSyncProvider));
-  ref.listen<SessionSyncState>(sessionSyncProvider, (_, next) => applyState(next));
+  applyChanges(null, ref.read(sessionSyncProvider));
+  ref.listen<SessionSyncState>(sessionSyncProvider, applyChanges);
 });
 
 final gameApiDataSourceProvider = Provider<GameApiDataSource>((ref) {
@@ -274,14 +274,14 @@ class GameSocketEventController {
   StreamSubscription<dynamic>? _socketSubscription;
   bool _connected = false;
   bool _hasConnectedOnce = false;
-  List<String> _visibleH3Indexes = const [];
+  final Set<String> _visibleH3Indexes = <String>{};
   DateTime _lastSyncTimestamp = DateTime.now().toUtc();
 
   Stream<Map<String, dynamic>> get events => _eventsController.stream;
 
   void connect({Iterable<String>? visibleH3Indexes}) {
     if (visibleH3Indexes != null) {
-      _visibleH3Indexes = visibleH3Indexes.toList(growable: false);
+      _visibleH3Indexes.addAll(visibleH3Indexes);
     }
     socket.connect();
   }
@@ -299,8 +299,13 @@ class GameSocketEventController {
   }
 
   void sendVisibleArea(Iterable<String> visibleH3Indexes) {
-    _visibleH3Indexes = visibleH3Indexes.toList(growable: false);
-    _emitMapSubscribe();
+    final newVisibleH3Indexes = visibleH3Indexes
+        .where(_visibleH3Indexes.add)
+        .toList(growable: false);
+    if (newVisibleH3Indexes.isEmpty) {
+      return;
+    }
+    _emitMapSubscribe(newVisibleH3Indexes);
   }
 
   void sendLocationUpdate({
@@ -402,12 +407,12 @@ class GameSocketEventController {
     });
   }
 
-  void _emitMapSubscribe() {
+  void _emitMapSubscribe([Iterable<String>? visibleH3Indexes]) {
     if (_visibleH3Indexes.isEmpty || !_connected) {
       return;
     }
     socket.emit('map_subscribe', {
-      'visibleH3Indexes': _visibleH3Indexes,
+      'visibleH3Indexes': visibleH3Indexes ?? _visibleH3Indexes,
     });
   }
 
@@ -652,4 +657,3 @@ class ProfileNotifier extends StateNotifier<AsyncValue<Map<String, dynamic>>> {
     await refresh();
   }
 }
-
