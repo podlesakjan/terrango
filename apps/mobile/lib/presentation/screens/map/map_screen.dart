@@ -43,7 +43,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _cameraInitialized = false;
   bool _tapInteractionInstalled = false;
   bool _socketInitialized = false;
-  Set<String> _lastVisibleH3Indexes = const <String>{};
+  /// Hexes already requested for this map session. The grid is cumulative, so
+  /// panning only needs to ask the server for cells outside this set.
+  Set<String> _requestedH3Indexes = <String>{};
   Timer? _viewportSyncDebounce;
   Timer? _locationHeartbeatTimer;
   bool? _appliedWakeLockEnabled;
@@ -66,7 +68,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       ref.read(gameSocketEventControllerProvider).resumeSession();
       _sendLocationUpdateFromCurrentPosition();
       _ensureLocationHeartbeat();
-      _scheduleViewportSync(force: true);
+      _scheduleViewportSync();
       return;
     }
 
@@ -243,7 +245,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   styleUri: config.mapOutdoorStyleUri,
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
-                    await _syncVisibleHexesFromViewport(forceSnapshot: true);
+                    await _syncVisibleHexesFromViewport();
                     if (!_tapInteractionInstalled) {
                       _tapInteractionInstalled = true;
                       mapboxMap.addInteraction(
@@ -608,14 +610,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _scheduleViewportSync();
   }
 
-  void _scheduleViewportSync({bool force = false}) {
+  void _scheduleViewportSync() {
     _viewportSyncDebounce?.cancel();
     _viewportSyncDebounce = Timer(const Duration(milliseconds: 350), () {
-      unawaited(_syncVisibleHexesFromViewport(forceSnapshot: force));
+      unawaited(_syncVisibleHexesFromViewport());
     });
   }
 
-  Future<void> _syncVisibleHexesFromViewport({bool forceSnapshot = false}) async {
+  Future<void> _syncVisibleHexesFromViewport() async {
     final map = _mapboxMap;
     if (map == null) {
       return;
@@ -637,15 +639,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
           .toSet();
 
       final controller = ref.read(gameSocketEventControllerProvider);
-      if (!_socketInitialized || forceSnapshot) {
+      if (!_socketInitialized) {
         _socketInitialized = true;
         controller.connect(visibleH3Indexes: visibleIndexes);
+        _requestedH3Indexes = visibleIndexes;
+        return;
       }
 
-      if (visibleIndexes.length != _lastVisibleH3Indexes.length ||
-          !visibleIndexes.containsAll(_lastVisibleH3Indexes)) {
-        _lastVisibleH3Indexes = visibleIndexes;
-        controller.sendVisibleArea(visibleIndexes);
+      final newVisibleIndexes = visibleIndexes.difference(_requestedH3Indexes);
+      if (newVisibleIndexes.isNotEmpty) {
+        _requestedH3Indexes = <String>{
+          ..._requestedH3Indexes,
+          ...newVisibleIndexes,
+        };
+        controller.sendVisibleArea(newVisibleIndexes);
       }
     } catch (_) {
       // Ignore viewport sync failures and retry on next camera change.
@@ -1586,4 +1593,3 @@ class _BucketAction {
   final bool enabled;
   final Future<void> Function(SoldierBucketSummary bucket) onPressed;
 }
-

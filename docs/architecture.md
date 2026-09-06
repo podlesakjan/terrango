@@ -276,7 +276,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
 #### Direction: Client -> Server (Player Actions)
 
 *   **Event: `request_map_snapshot`**
-    *   **Usage:** Requests the complete state of all currently visible hexagons immediately after connecting or reconnecting.
+    *   **Usage:** Requests the complete state of all currently visible hexagons on the first connection. Reconnects use `resume_session` followed by `map_subscribe` for the cached indexes.
     *   **Payload:**
         ```json
         {
@@ -297,7 +297,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `map_subscribe`**
-    *   **Usage:** Subscribing to map changes based on the current visible camera viewport in the Mapbox map widget.
+    *   **Usage:** Requests only H3 indexes newly entering the map cache. The server adds them to the socket subscription and returns their state in `map_grid_update`; the client merges that update into its existing grid. On reconnect, the client resends its cached index set because the server-side socket subscription is new.
     *   **Payload:**
         ```json
         {
@@ -385,7 +385,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
 #### Direction: Server -> Client (State Updates & Notifications)
 
 *   **Event: `map_grid_update`**
-    *   **Usage:** The server sends grid changes to all connected clients in the given area (e.g., a change of field ownership after a battle).
+    *   **Usage:** The server sends changed hexagons in subscribed areas (e.g., after a battle) and the state of hexagons newly requested through `map_subscribe`. This payload is always incremental: the client applies it with `applyMapGridUpdate` and must not clear its existing grid.
     *   **Payload:**
         ```json
         {
@@ -488,7 +488,7 @@ The WebSocket connection is initiated on the Tactical Map (Screen 2) and remains
         ```
 
 *   **Event: `map_snapshot`**
-    *   **Usage:** Returns the complete current state of all requested hexagons after subscription or reconnect.
+    *   **Usage:** Returns the complete initial state of requested hexagons after the first connection. The client may replace its grid with this payload. Subsequent viewport loads and resumed-session deltas use `map_grid_update` and are merged.
     *   **Payload:**
         ```json
         {

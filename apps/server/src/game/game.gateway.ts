@@ -148,7 +148,7 @@ export class GameGateway
         this.socketContexts.get(client.id)?.visibleH3Indexes ?? [],
       );
       client.emit(
-        'map_snapshot',
+        'map_grid_update',
         this.gameService.resumeSession(userId, body.lastSyncTimestamp, visibleH3Indexes),
       );
       client.emit('army_update', this.gameService.getArmyUpdate(userId));
@@ -168,10 +168,14 @@ export class GameGateway
       const visibleH3Indexes = this.gameService.normalizeVisibleH3Indexes(
         body.visibleH3Indexes,
       );
-      this.setVisibleHexes(client.id, userId, visibleH3Indexes);
+      const newVisibleH3Indexes = this.addVisibleHexes(
+        client.id,
+        userId,
+        visibleH3Indexes,
+      );
       client.emit(
-        'map_snapshot',
-        this.gameService.getMapSnapshot(userId, visibleH3Indexes),
+        'map_grid_update',
+        this.gameService.getMapSnapshot(userId, newVisibleH3Indexes),
       );
     } catch (error) {
       throw this.toWsException(error);
@@ -315,6 +319,23 @@ export class GameGateway
       userId,
       visibleH3Indexes: new Set(visibleH3Indexes),
     });
+  }
+
+  private addVisibleHexes(
+    socketId: string,
+    userId: string,
+    visibleH3Indexes: string[],
+  ): string[] {
+    const context = this.socketContexts.get(socketId);
+    const subscribedHexes = context?.visibleH3Indexes ?? new Set<string>();
+    const newVisibleH3Indexes = visibleH3Indexes.filter(
+      (h3Index) => !subscribedHexes.has(h3Index),
+    );
+    this.socketContexts.set(socketId, {
+      userId,
+      visibleH3Indexes: new Set([...subscribedHexes, ...newVisibleH3Indexes]),
+    });
+    return newVisibleH3Indexes;
   }
 
   private toWsException(error: unknown): WsException {
