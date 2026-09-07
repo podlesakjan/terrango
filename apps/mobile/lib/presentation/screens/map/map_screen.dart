@@ -698,7 +698,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (zoom >= 13) return 3;
     if (zoom >= 11) return 4;
     if (zoom >= 9) return 5;
-    return 6;
+    if (zoom >= 7) return 6;
+    if (zoom >= 5) return 7;
+    if (zoom >= 3) return 8;
+    return 9;
   }
 
   void _openHexContextSheet(
