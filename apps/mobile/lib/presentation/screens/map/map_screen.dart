@@ -48,6 +48,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Set<String> _requestedH3Indexes = <String>{};
   Timer? _viewportSyncDebounce;
   Timer? _locationHeartbeatTimer;
+  bool _hexSourceRefreshInProgress = false;
+  List<HexTile>? _pendingHexSourceHexes;
   bool? _appliedWakeLockEnabled;
   bool? _appliedBackgroundTrackingEnabled;
 
@@ -131,7 +133,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
 
     _sendLocationUpdate(position, h3Index);
-    _refreshHexSource();
+    _queueHexSourceRefresh();
     _updateGpsPuck();
     _setInitialCameraIfPossible();
   }
@@ -204,6 +206,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final backgroundTrackingEnabled = ref.watch(backgroundTrackingEnabledProvider);
     ref.watch(sessionSyncProvider);
 
+    // Updating a Flutter MapWidget does not update its native GeoJSON source.
+    // Refresh it whenever the repository receives another map grid payload.
+    ref.listen<AsyncValue<List<HexTile>>>(visibleHexesProvider, (_, next) {
+      final hexes = next.valueOrNull;
+      if (hexes != null) {
+        _queueHexSourceRefresh(hexes);
+      }
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
@@ -270,7 +281,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   onStyleLoadedListener: (_) async {
                     _styleReady = true;
                     await _ensureGameLayers();
-                    _refreshHexSource();
+                    _queueHexSourceRefresh();
                     _updateGpsPuck();
 
                     if (!_cameraInitialized) {
@@ -480,14 +491,37 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  Future<void> _refreshHexSource() async {
-    final map = _mapboxMap;
-    if (map == null || !_styleReady) {
+  void _queueHexSourceRefresh([List<HexTile>? hexes]) {
+    _pendingHexSourceHexes =
+        hexes ?? ref.read(visibleHexesProvider).value;
+    if (_pendingHexSourceHexes == null || _hexSourceRefreshInProgress) {
       return;
     }
 
-    final hexes = ref.read(visibleHexesProvider).value;
-    if (hexes == null) {
+    _hexSourceRefreshInProgress = true;
+    unawaited(_flushHexSourceRefreshes());
+  }
+
+  Future<void> _flushHexSourceRefreshes() async {
+    while (mounted) {
+      final hexes = _pendingHexSourceHexes;
+      _pendingHexSourceHexes = null;
+      if (hexes == null) {
+        break;
+      }
+
+      try {
+        await _refreshHexSource(hexes);
+      } catch (_) {
+        // A style reload can briefly remove the source; the next update retries.
+      }
+    }
+    _hexSourceRefreshInProgress = false;
+  }
+
+  Future<void> _refreshHexSource(List<HexTile> hexes) async {
+    final map = _mapboxMap;
+    if (map == null || !_styleReady) {
       return;
     }
 
