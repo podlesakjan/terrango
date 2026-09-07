@@ -32,6 +32,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _hexLineLayerId = 'hex_line_layer';
 
   final H3 _h3 = const H3Factory().load();
+  final GlobalKey _mapWidgetKey = GlobalKey(debugLabel: 'terrango_mapbox');
 
   MapboxMap? _mapboxMap;
   StreamSubscription<geolocator.Position>? _positionSubscription;
@@ -248,7 +249,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
             child: hexesAsync.when(
               data: (hexes) {
                 return MapWidget(
-                  key: const ValueKey('terrango_mapbox'),
+                  key: _mapWidgetKey,
                   styleUri: config.mapOutdoorStyleUri,
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
@@ -616,22 +617,46 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _syncVisibleHexesFromViewport() async {
     final map = _mapboxMap;
-    if (map == null) {
+    final mapRenderBox =
+        _mapWidgetKey.currentContext?.findRenderObject() as RenderBox?;
+    if (map == null || mapRenderBox == null || !mapRenderBox.hasSize) {
       return;
     }
 
     try {
-      final cameraState = await map.getCameraState();
-      final center = cameraState.center.coordinates;
-      final zoom = cameraState.zoom;
-      final centerH3Index = _toH3IndexString(
-        center.lat.toDouble(),
-        center.lng.toDouble(),
-      );
+      final size = mapRenderBox.size;
+      if (size.isEmpty) {
+        return;
+      }
 
-      final radius = _viewportRadiusFromZoom(zoom);
-      final visibleIndexes = _h3
-          .kRing(_parseH3(centerH3Index), radius)
+      final corners = await Future.wait([
+        ScreenCoordinate(x: 0, y: 0),
+        ScreenCoordinate(x: size.width, y: 0),
+        ScreenCoordinate(x: size.width, y: size.height),
+        ScreenCoordinate(x: 0, y: size.height),
+      ].map(map.coordinateForPixel));
+
+      final viewportPolygon = corners
+          .map(
+            (corner) => GeoCoord(
+              lon: corner.coordinates.lng.toDouble(),
+              lat: corner.coordinates.lat.toDouble(),
+            ),
+          )
+          .toList(growable: false);
+      final polygonIndexes = _h3.polyfill(
+        coordinates: viewportPolygon,
+        resolution: 9,
+      );
+      // H3's polyfill selects cells based on their center. Include cells at
+      // each viewport corner and one neighboring ring so boundary cells stay
+      // present while the user makes a small pan.
+      final viewportIndexes = <BigInt>{
+        ...polygonIndexes,
+        ...viewportPolygon.map((point) => _h3.geoToH3(point, 9)),
+      };
+      final visibleIndexes = viewportIndexes
+          .expand((index) => _h3.kRing(index, 1))
           .map((index) => index.toRadixString(16))
           .toSet();
 
@@ -654,17 +679,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     } catch (_) {
       // Ignore viewport sync failures and retry on next camera change.
     }
-  }
-
-  int _viewportRadiusFromZoom(double zoom) {
-    if (zoom >= 15) return 2;
-    if (zoom >= 13) return 3;
-    if (zoom >= 11) return 4;
-    if (zoom >= 9) return 5;
-    if (zoom >= 7) return 6;
-    if (zoom >= 5) return 7;
-    if (zoom >= 3) return 8;
-    return 9;
   }
 
   void _openHexContextSheet(
