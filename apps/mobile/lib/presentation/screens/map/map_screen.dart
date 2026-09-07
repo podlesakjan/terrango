@@ -15,7 +15,6 @@ import '../../../core/routing/app_router.dart';
 import '../../../domain/entities/army_overview.dart';
 import '../../../domain/entities/hex_tile.dart';
 import '../../providers/app_providers.dart';
-import 'map_camera_storage.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key, this.focusH3Index});
@@ -33,7 +32,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _hexLineLayerId = 'hex_line_layer';
 
   final H3 _h3 = const H3Factory().load();
-  final _cameraStorage = MapCameraStorage();
 
   MapboxMap? _mapboxMap;
   StreamSubscription<geolocator.Position>? _positionSubscription;
@@ -77,7 +75,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.inactive) {
-      unawaited(_saveCameraPosition());
       _locationHeartbeatTimer?.cancel();
       _locationHeartbeatTimer = null;
     }
@@ -85,7 +82,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   @override
   void dispose() {
-    unawaited(_saveCameraPosition());
     WidgetsBinding.instance.removeObserver(this);
     _positionSubscription?.cancel();
     _viewportSyncDebounce?.cancel();
@@ -256,7 +252,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   styleUri: config.mapOutdoorStyleUri,
                   onMapCreated: (mapboxMap) async {
                     _mapboxMap = mapboxMap;
-                    await _syncVisibleHexesFromViewport();
+                    await _setInitialCameraIfPossible();
                     if (!_tapInteractionInstalled) {
                       _tapInteractionInstalled = true;
                       mapboxMap.addInteraction(
@@ -406,24 +402,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     }
     return null;
-  }
-
-  Point _initialCenterFromState(List<HexTile> hexes) {
-    if (_currentPosition != null) {
-      return Point(
-        coordinates: Position(
-          _currentPosition!.longitude,
-          _currentPosition!.latitude,
-        ),
-      );
-    }
-
-    if (hexes.isNotEmpty) {
-      final center = _h3.h3ToGeo(_parseH3(hexes.first.h3Index));
-      return Point(coordinates: Position(center.lon, center.lat));
-    }
-
-    return Point(coordinates: Position(14.4378, 50.0755));
   }
 
   Future<void> _ensureGameLayers() async {
@@ -595,21 +573,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
     final map = _mapboxMap;
     if (map == null || !_styleReady) {
-      return;
-    }
-
-    final storedCamera = await _cameraStorage.load();
-    if (storedCamera != null && (widget.focusH3Index == null || widget.focusH3Index!.isEmpty)) {
-      _cameraInitialized = true;
-      await map.setCamera(
-        CameraOptions(
-          center: storedCamera.center,
-          zoom: ref.read(appConfigProvider).mapDefaultZoom,
-          bearing: storedCamera.bearing,
-          pitch: storedCamera.pitch,
-        ),
-      );
-      _scheduleViewportSync();
       return;
     }
 
@@ -976,18 +939,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return 'Battle $result${targetH3Index != null ? ' on $targetH3Index' : ''}: $dead dead, $survivorCount survivors.';
   }
 
-  Future<void> _saveCameraPosition() async {
-    final map = _mapboxMap;
-    if (map == null) {
-      return;
-    }
-    try {
-      final cameraState = await map.getCameraState();
-      await _cameraStorage.save(cameraState);
-    } catch (_) {
-      // It's fine to ignore, not critical.
-    }
-  }
 }
 
 class _StatusBar extends StatelessWidget {
