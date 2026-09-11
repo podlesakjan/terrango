@@ -51,6 +51,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   List<HexTile>? _pendingHexSourceHexes;
   bool? _appliedWakeLockEnabled;
   bool? _appliedBackgroundTrackingEnabled;
+  bool _isZoomedOut = false;
 
   BannerAd? _bannerAd;
   bool _bannerLoaded = false;
@@ -129,8 +130,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
       });
     }
 
-    _sendLocationUpdate(position, h3Index);
-    _queueHexSourceRefresh();
+    if (!_isZoomedOut) {
+      _sendLocationUpdate(position, h3Index);
+      _queueHexSourceRefresh();
+    }
     _updateGpsPuck();
     _setInitialCameraIfPossible();
   }
@@ -155,6 +158,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   void _sendLocationUpdate(geolocator.Position position, String h3Index) {
+    if (_isZoomedOut) {
+      return;
+    }
     ref.read(gameSocketEventControllerProvider).sendLocationUpdate(
       latitude: position.latitude,
       longitude: position.longitude,
@@ -309,6 +315,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
               armyOverviewAsync: armyOverviewAsync,
             ),
           ),
+          if (_isZoomedOut)
+            Positioned(
+              bottom: 120,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Zoom in to see the battlefield',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -623,6 +649,24 @@ class _MapScreenState extends ConsumerState<MapScreen>
       return;
     }
 
+    final zoom = await map.getCameraState().then((s) => s.zoom);
+    if (zoom <= 11) {
+      if (!_isZoomedOut) {
+        setState(() {
+          _isZoomedOut = true;
+        });
+        await _setHexGridVisibility(false);
+      }
+      return; // Stop processing
+    } else {
+      if (_isZoomedOut) {
+        setState(() {
+          _isZoomedOut = false;
+        });
+        await _setHexGridVisibility(true);
+      }
+    }
+
     try {
       final size = mapRenderBox.size;
       if (size.isEmpty) {
@@ -678,6 +722,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     } catch (_) {
       // Ignore viewport sync failures and retry on next camera change.
+    }
+  }
+
+  Future<void> _setHexGridVisibility(bool visible) async {
+    final map = _mapboxMap;
+    if (map == null || !_styleReady) {
+      return;
+    }
+    final visibility = visible ? 'visible' : 'none';
+    try {
+      await map.style
+          .setStyleLayerProperty(_hexFillLayerId, 'visibility', visibility);
+    } catch (_) {
+      // Layer might not exist yet.
+    }
+    try {
+      await map.style
+          .setStyleLayerProperty(_hexLineLayerId, 'visibility', visibility);
+    } catch (_) {
+      // Layer might not exist yet.
     }
   }
 
