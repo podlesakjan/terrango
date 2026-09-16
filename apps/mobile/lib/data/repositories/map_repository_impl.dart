@@ -71,9 +71,10 @@ class MapRepositoryImpl implements MapRepository {
   }
 
   void _replaceVisibleHexes(Iterable<HexTile> tiles) {
-    _visibleHexesByIndex
-      ..clear()
-      ..addEntries(tiles.where((tile) => tile.h3Index.isNotEmpty).map((tile) => MapEntry(tile.h3Index, tile)));
+    final newHexes = tiles.where((tile) => tile.h3Index.isNotEmpty);
+    for (final tile in newHexes) {
+      _visibleHexesByIndex[tile.h3Index] = tile;
+    }
     _emitCurrent();
   }
 
