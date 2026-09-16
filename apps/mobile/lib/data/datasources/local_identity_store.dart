@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class LocalIdentityStore {
@@ -12,7 +13,14 @@ class LocalIdentityStore {
   final FlutterSecureStorage _storage;
 
   Future<String> loadOrCreateRegistrationToken({required String nickname}) async {
-    final existing = (await _storage.read(key: _registrationTokenKey) ?? '').trim();
+    String existing = '';
+    try {
+      existing = (await _storage.read(key: _registrationTokenKey) ?? '').trim();
+    } on PlatformException catch (_) {
+      // Handle Android Keystore corruption.
+      await _storage.delete(key: _registrationTokenKey);
+    }
+
     if (existing.isNotEmpty) {
       return existing;
     }
@@ -31,4 +39,3 @@ class LocalIdentityStore {
     return token;
   }
 }
-
