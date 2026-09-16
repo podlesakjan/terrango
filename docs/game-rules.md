@@ -9,7 +9,7 @@
 *   **Bluetooth Recruitment:** You scan the surroundings by walking outside. Every unique Bluetooth ID found generates one soldier for your reserve.
 *   **Two Soldier Classes:** Roles are permanently determined based on the ID:
     *   **Warrior:** Universal force. Used for physical attacks as well as guarding hexagons.
-    *   **Support:** Units with spy and logistical skills (Scout, Jammer, Decoy).
+    *   **Support:** Units with spy and logistical skills. Used in support roles.
 
 ### 3. Attack and Accessibility Rules
 *   **Free (Gray) Hexagon:** You arrive at the location and instantly claim it. It does not need to neighbor anything you already own.
