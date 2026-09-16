@@ -308,6 +308,17 @@ class GameSocketEventController {
     _emitMapSubscribe(newVisibleH3Indexes);
   }
 
+  /// Retries a request whose response did not arrive. Normal viewport updates
+  /// must use [sendVisibleArea], which preserves the subscription cache.
+  void retryVisibleArea(Iterable<String> visibleH3Indexes) {
+    final indexes = visibleH3Indexes.toSet();
+    if (indexes.isEmpty) {
+      return;
+    }
+    _visibleH3Indexes.addAll(indexes);
+    _emitMapSubscribe(indexes);
+  }
+
   void sendLocationUpdate({
     required double latitude,
     required double longitude,

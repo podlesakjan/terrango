@@ -168,14 +168,14 @@ export class GameGateway
       const visibleH3Indexes = this.gameService.normalizeVisibleH3Indexes(
         body.visibleH3Indexes,
       );
-      const newVisibleH3Indexes = this.addVisibleHexes(
+      this.addVisibleHexes(
         client.id,
         userId,
         visibleH3Indexes,
       );
       client.emit(
         'map_grid_update',
-        this.gameService.getMapSnapshot(userId, newVisibleH3Indexes),
+        this.gameService.getMapSnapshot(userId, visibleH3Indexes),
       );
     } catch (error) {
       throw this.toWsException(error);
