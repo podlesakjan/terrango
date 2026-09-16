@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../domain/entities/auth_session.dart';
@@ -12,14 +13,21 @@ class AuthSessionStore {
   final FlutterSecureStorage _storage;
 
   Future<AuthSession?> load() async {
-    final token = await _storage.read(key: _tokenKey) ?? '';
-    final userId = await _storage.read(key: _userIdKey) ?? '';
+    try {
+      final token = await _storage.read(key: _tokenKey) ?? '';
+      final userId = await _storage.read(key: _userIdKey) ?? '';
 
-    if (token.isEmpty || userId.isEmpty) {
+      if (token.isEmpty || userId.isEmpty) {
+        return null;
+      }
+
+      return AuthSession(userId: userId, token: token);
+    } on PlatformException catch (_) {
+      // Handle Android Keystore BadPaddingException (corrupt storage keys).
+      // We must clear the corrupted data so the user can recover.
+      await clear();
       return null;
     }
-
-    return AuthSession(userId: userId, token: token);
   }
 
   Future<void> save(AuthSession session) async {

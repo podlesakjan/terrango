@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AppPreferencesStore {
@@ -12,7 +13,14 @@ class AppPreferencesStore {
   final FlutterSecureStorage _storage;
 
   Future<bool> readBool(String key, {bool fallback = false}) async {
-    final value = (await _storage.read(key: key) ?? '').trim().toLowerCase();
+    String value = '';
+    try {
+      value = (await _storage.read(key: key) ?? '').trim().toLowerCase();
+    } on PlatformException catch (_) {
+      // Handle Android Keystore corruption.
+      await _storage.delete(key: key);
+    }
+
     return switch (value) {
       'true' => true,
       'false' => false,
@@ -24,4 +32,3 @@ class AppPreferencesStore {
     await _storage.write(key: key, value: value.toString());
   }
 }
-
