@@ -414,7 +414,7 @@ class GameSocketEventController {
       return;
     }
     socket.emit('request_map_snapshot', {
-      'visibleH3Indexes': _visibleH3Indexes,
+      'visibleH3Indexes': _visibleH3Indexes.toList(growable: false),
     });
   }
 
@@ -423,7 +423,7 @@ class GameSocketEventController {
       return;
     }
     socket.emit('map_subscribe', {
-      'visibleH3Indexes': visibleH3Indexes ?? _visibleH3Indexes,
+      'visibleH3Indexes': (visibleH3Indexes ?? _visibleH3Indexes).toList(growable: false),
     });
   }
 
