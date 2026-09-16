@@ -45,10 +45,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _isWaitingForInitialLocation = true;
   bool _isLocationTrackingStarting = false;
   String? _initialLocationError;
-  /// Hexes already requested for this map session. The grid is cumulative, so
-  /// panning only needs to ask the server for cells outside this set.
-  Set<String> _requestedH3Indexes = <String>{};
+  final Set<String> _loadedH3Indexes = <String>{};
+  final Map<String, DateTime> _pendingH3Indexes = <String, DateTime>{};
   Timer? _viewportSyncDebounce;
+  Timer? _pendingHexRetryTimer;
+  bool _viewportSyncInProgress = false;
+  bool _viewportSyncPending = false;
   Timer? _locationHeartbeatTimer;
   bool _hexSourceRefreshInProgress = false;
   List<HexTile>? _pendingHexSourceHexes;
@@ -90,6 +92,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     WidgetsBinding.instance.removeObserver(this);
     _positionSubscription?.cancel();
     _viewportSyncDebounce?.cancel();
+    _pendingHexRetryTimer?.cancel();
     _locationHeartbeatTimer?.cancel();
     ref.read(gameSocketEventControllerProvider).disconnect();
     _bannerAd?.dispose();
@@ -256,6 +259,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     ref.listen<AsyncValue<List<HexTile>>>(visibleHexesProvider, (_, next) {
       final hexes = next.valueOrNull;
       if (hexes != null) {
+        _markHexesLoaded(hexes);
         _queueHexSourceRefresh(hexes);
       }
     });
@@ -709,11 +713,41 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  void _scheduleViewportSync() {
+  void _scheduleViewportSync({Duration delay = const Duration(milliseconds: 350)}) {
     _viewportSyncDebounce?.cancel();
-    _viewportSyncDebounce = Timer(const Duration(milliseconds: 350), () {
+    _viewportSyncDebounce = Timer(delay, () {
       unawaited(_syncVisibleHexesFromViewport());
     });
+  }
+
+  void _retryViewportSync() {
+    if (mounted && _styleReady) {
+      _scheduleViewportSync(delay: const Duration(milliseconds: 200));
+    }
+  }
+
+  void _markHexesLoaded(Iterable<HexTile> hexes) {
+    _loadedH3Indexes.addAll(
+      hexes.map((hex) => hex.h3Index).where((index) => index.isNotEmpty),
+    );
+    _pendingH3Indexes.removeWhere((index, _) => _loadedH3Indexes.contains(index));
+    _schedulePendingHexRetry();
+  }
+
+  void _schedulePendingHexRetry() {
+    _pendingHexRetryTimer?.cancel();
+    if (_pendingH3Indexes.isEmpty || !mounted) {
+      return;
+    }
+
+    final oldestRequest = _pendingH3Indexes.values.reduce(
+      (oldest, requestedAt) => requestedAt.isBefore(oldest) ? requestedAt : oldest,
+    );
+    final remaining = const Duration(seconds: 3) - DateTime.now().difference(oldestRequest);
+    _pendingHexRetryTimer = Timer(
+      remaining.isNegative ? Duration.zero : remaining,
+      () => _scheduleViewportSync(delay: Duration.zero),
+    );
   }
 
   Future<void> _syncVisibleHexesFromViewport() async {
@@ -721,30 +755,38 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final mapRenderBox =
         _mapWidgetKey.currentContext?.findRenderObject() as RenderBox?;
     if (map == null || mapRenderBox == null || !mapRenderBox.hasSize) {
+      _retryViewportSync();
       return;
     }
 
-    final zoom = await map.getCameraState().then((s) => s.zoom);
-    if (zoom <= 11) {
-      if (!_isZoomedOut) {
-        setState(() {
-          _isZoomedOut = true;
-        });
-        await _setHexGridVisibility(false);
-      }
-      return; // Stop processing
-    } else {
-      if (_isZoomedOut) {
-        setState(() {
-          _isZoomedOut = false;
-        });
-        await _setHexGridVisibility(true);
-      }
+    if (_viewportSyncInProgress) {
+      _viewportSyncPending = true;
+      return;
     }
+    _viewportSyncInProgress = true;
 
     try {
+      final zoom = await map.getCameraState().then((s) => s.zoom);
+      if (zoom <= 11) {
+        if (!_isZoomedOut && mounted) {
+          setState(() {
+            _isZoomedOut = true;
+          });
+          await _setHexGridVisibility(false);
+        }
+        return;
+      } else {
+        if (_isZoomedOut && mounted) {
+          setState(() {
+            _isZoomedOut = false;
+          });
+          await _setHexGridVisibility(true);
+        }
+      }
+
       final size = mapRenderBox.size;
       if (size.isEmpty) {
+        _retryViewportSync();
         return;
       }
 
@@ -775,28 +817,56 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ...viewportPolygon.map((point) => _h3.geoToH3(point, 9)),
       };
       final visibleIndexes = viewportIndexes
-          .expand((index) => _h3.kRing(index, 1))
+          .expand((index) => _h3.kRing(index, 2))
           .map((index) => index.toRadixString(16))
           .toSet();
 
       final controller = ref.read(gameSocketEventControllerProvider);
+      _markHexesLoaded(ref.read(visibleHexesProvider).value ?? const <HexTile>[]);
+      final now = DateTime.now();
       if (!_socketInitialized) {
         _socketInitialized = true;
+        for (final index in visibleIndexes) {
+          _pendingH3Indexes[index] = now;
+        }
         controller.connect(visibleH3Indexes: visibleIndexes);
-        _requestedH3Indexes = visibleIndexes;
+        _schedulePendingHexRetry();
         return;
       }
 
-      final newVisibleIndexes = visibleIndexes.difference(_requestedH3Indexes);
-      if (newVisibleIndexes.isNotEmpty) {
-        _requestedH3Indexes = <String>{
-          ..._requestedH3Indexes,
-          ...newVisibleIndexes,
-        };
-        controller.sendVisibleArea(newVisibleIndexes);
+      final newIndexes = visibleIndexes.where(
+        (index) => !_loadedH3Indexes.contains(index) && !_pendingH3Indexes.containsKey(index),
+      ).toSet();
+      final retryIndexes = visibleIndexes.where(
+        (index) {
+          final requestedAt = _pendingH3Indexes[index];
+          return requestedAt != null && now.difference(requestedAt) >= const Duration(seconds: 3);
+        },
+      ).toSet();
+
+      if (newIndexes.isNotEmpty) {
+        for (final index in newIndexes) {
+          _pendingH3Indexes[index] = now;
+        }
+        controller.sendVisibleArea(newIndexes);
       }
+      if (retryIndexes.isNotEmpty) {
+        for (final index in retryIndexes) {
+          _pendingH3Indexes[index] = now;
+        }
+        controller.retryVisibleArea(retryIndexes);
+      }
+      _schedulePendingHexRetry();
     } catch (_) {
-      // Ignore viewport sync failures and retry on next camera change.
+      // The native map can still be laying out after the style callback.
+      // Retrying is essential because there may be no later camera event.
+      _retryViewportSync();
+    } finally {
+      _viewportSyncInProgress = false;
+      if (_viewportSyncPending) {
+        _viewportSyncPending = false;
+        _scheduleViewportSync();
+      }
     }
   }
 
