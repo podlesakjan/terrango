@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/routing/app_router.dart';
+import '../../../data/datasources/auth_session_store.dart';
 import '../../providers/app_providers.dart';
 
 class OnboardingScreen extends ConsumerStatefulWidget {
@@ -132,6 +133,40 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
 
     if (authSessionAsync.hasError) {
+      final error = authSessionAsync.error;
+      if (error is CorruptedSessionException) {
+        return Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, size: 48, color: Colors.orange),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Your local session was corrupted and has been cleared.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Please register again to continue. We apologize for the inconvenience.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: () => ref.refresh(authSessionProvider),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
       return Scaffold(
         body: Center(
           child: Padding(

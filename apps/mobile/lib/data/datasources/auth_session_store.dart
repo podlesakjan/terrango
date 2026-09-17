@@ -3,6 +3,14 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../domain/entities/auth_session.dart';
 
+class CorruptedSessionException implements Exception {
+  final String message;
+  CorruptedSessionException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 class AuthSessionStore {
   AuthSessionStore({FlutterSecureStorage? storage})
     : _storage = storage ?? const FlutterSecureStorage();
@@ -22,11 +30,11 @@ class AuthSessionStore {
       }
 
       return AuthSession(userId: userId, token: token);
-    } on PlatformException catch (_) {
-      // Handle Android Keystore BadPaddingException (corrupt storage keys).
-      // We must clear the corrupted data so the user can recover.
+    } on PlatformException catch (e) {
       await clear();
-      return null;
+      throw CorruptedSessionException(
+        'Failed to read session data due to a storage error. Your session has been cleared. Please sign in again. Error: $e',
+      );
     }
   }
 
