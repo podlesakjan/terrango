@@ -29,7 +29,7 @@ When an enemy attacks your territory, you can respond remotely from your reserve
     *   **Percentage Losses:** If you do not sacrifice a Support unit, the system takes a transmission tax (e.g., 40% of the sent soldiers randomly perish during transit).
 
 ### 6. Combat Evaluation and Massive Background Bonus
-*   **Clash:** The attacker's army size is compared with the garrison size on-site (including any remote reinforcements and skills). The battle is evaluated instantly in the background.
+*   **Clash:** The attacker's army size is compared with the garrison size on-site. The battle is evaluated instantly in the background.
 *   **Massive Adjacency Bonus (100%):** Every hexagon of yours (in both Home and Outpost territories) gains +100% to its defense for each additional hexagon of yours that neighbors it.
     *   *Example 1:* If you have 2 connected hexagons on a trip, each of them has a neighbor and gains +100% to defense.
     *   *Example 2:* A sector in the middle of a large base, which is fully surrounded by 6 of your hexagons, receives an extreme bonus of +600% to its defense.
